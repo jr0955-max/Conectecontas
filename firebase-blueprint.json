@@ -1,0 +1,149 @@
+{
+  "entities": {
+    "companies": {
+      "title": "Companies",
+      "description": "Registered companies and branches",
+      "type": "object",
+      "properties": {
+        "id": { "type": "number" },
+        "nome": { "type": "string" },
+        "cnpj": { "type": "string" },
+        "criado_em": { "type": "string" }
+      },
+      "required": ["id", "nome"]
+    },
+    "users": {
+      "title": "Users",
+      "description": "System operators and permissions",
+      "type": "object",
+      "properties": {
+        "id": { "type": "number" },
+        "nome": { "type": "string" },
+        "email": { "type": "string" },
+        "senha_hash": { "type": "string" },
+        "acesso_todas_empresas": { "type": "boolean" },
+        "criado_em": { "type": "string" }
+      },
+      "required": ["id", "nome", "email", "senha_hash", "acesso_todas_empresas"]
+    },
+    "user_companies": {
+      "title": "User Company Links",
+      "description": "Permissions linking users to allowed companies",
+      "type": "object",
+      "properties": {
+        "id": { "type": "number" },
+        "usuario_id": { "type": "number" },
+        "empresa_id": { "type": "number" }
+      },
+      "required": ["id", "usuario_id", "empresa_id"]
+    },
+    "accounts": {
+      "title": "Financial Accounts",
+      "description": "Accounts payable and accounts receivable records",
+      "type": "object",
+      "properties": {
+        "id": { "type": "number" },
+        "empresa_id": { "type": "number" },
+        "tipo": { "type": "string", "enum": ["pagar", "receber"] },
+        "descricao": { "type": "string" },
+        "valor": { "type": "number" },
+        "data_vencimento": { "type": "string" },
+        "status": { "type": "string", "enum": ["Pendente", "Pago", "Recebido"] },
+        "categoria": { "type": "string" },
+        "observacoes": { "type": "string" },
+        "banco_origem": { "type": "string" },
+        "documento_ref": { "type": "string" },
+        "criado_por": { "type": "string" },
+        "criado_em": { "type": "string" },
+        "atualizado_por": { "type": "string" },
+        "atualizado_em": { "type": "string" },
+        "excluido": { "type": "boolean" },
+        "excluido_em": { "type": "string" },
+        "excluido_por": { "type": "string" }
+      },
+      "required": ["id", "empresa_id", "tipo", "descricao", "valor", "data_vencimento", "status"]
+    },
+    "audit_logs": {
+      "title": "Audit Logs",
+      "description": "Activity history and audit trail records",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "data_hora": { "type": "string" },
+        "usuario_id": { "type": "number" },
+        "usuario_nome": { "type": "string" },
+        "usuario_email": { "type": "string" },
+        "acao": { "type": "string" },
+        "entidade": { "type": "string" },
+        "entidade_id": { "type": "string" },
+        "empresa_id": { "type": "number" },
+        "empresa_nome": { "type": "string" },
+        "descricao": { "type": "string" },
+        "detalhes": { "type": "object" }
+      },
+      "required": ["id", "data_hora", "usuario_nome", "acao", "entidade", "descricao"]
+    },
+    "tenant_banking_credentials": {
+      "title": "Tenant Banking Credentials",
+      "description": "Encrypted banking credentials and webhook secrets for BB, Stone, InfinitePay per company and tenant",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "tenant_id": { "type": "number" },
+        "company_id": { "type": "number" },
+        "provider": { "type": "string", "enum": ["bb", "stone", "infinitepay"] },
+        "client_id": { "type": "string" },
+        "client_secret": { "type": "string" },
+        "webhook_secret": { "type": "string" },
+        "chave_pix": { "type": "string" },
+        "certificado_path": { "type": "string" },
+        "ambiente": { "type": "string", "enum": ["sandbox", "producao"] },
+        "status": { "type": "string", "enum": ["ativo", "inativo"] },
+        "criado_em": { "type": "string" },
+        "atualizado_em": { "type": "string" },
+        "criado_por": { "type": "string" },
+        "atualizado_por": { "type": "string" }
+      },
+      "required": ["id", "tenant_id", "company_id", "provider", "client_id", "status"]
+    },
+    "tenants": {
+      "title": "Tenants / SaaS Clients",
+      "description": "Customer tenants and subscription validity records",
+      "type": "object",
+      "properties": {
+        "id": { "type": "number" },
+        "nome": { "type": "string" },
+        "email": { "type": "string" },
+        "status": { "type": "string", "enum": ["ativo", "inativo", "expirado"] },
+        "expiracao": { "type": "string" },
+        "plano": { "type": "string" },
+        "limite_empresas": { "type": "number" },
+        "limite_usuarios": { "type": "number" },
+        "valor_mensal": { "type": "number" },
+        "telefone": { "type": "string" },
+        "documento": { "type": "string" },
+        "criado_em": { "type": "string" }
+      },
+      "required": ["id", "nome", "email", "status", "expiracao"]
+    },
+    "billing_invoices": {
+      "title": "Billing Invoices & Subscriptions",
+      "description": "Payment invoices and subscription history from Mercado Pago",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "tenant_id": { "type": "number" },
+        "valor": { "type": "number" },
+        "status": { "type": "string" },
+        "data_pagamento": { "type": "string" },
+        "forma_pagamento": { "type": "string" },
+        "mercadopago_id": { "type": "string" },
+        "preapproval_id": { "type": "string" },
+        "external_reference": { "type": "string" },
+        "plano": { "type": "string" },
+        "descricao": { "type": "string" }
+      },
+      "required": ["id", "tenant_id", "valor", "status", "data_pagamento"]
+    }
+  }
+}
