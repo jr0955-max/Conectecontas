@@ -424,16 +424,13 @@ export const OfxImportModal: React.FC<OfxImportModalProps> = ({
   const handleSingleReconcile = async (candidate: MatchCandidate) => {
     if (!candidate.matchedAccount || isProcessing) return;
     setIsProcessing(true);
-    const safetyTimer = setTimeout(() => setIsProcessing(false), 4000);
+    const safetyTimer = setTimeout(() => setIsProcessing(false), 15000);
     try {
-      await Promise.race([
-        onReconcileAccount(
-          candidate.matchedAccount.id,
-          candidate.transaction.fitid,
-          selectedBankId ? Number(selectedBankId) : undefined
-        ),
-        new Promise((resolve) => setTimeout(resolve, 3000)),
-      ]);
+      await onReconcileAccount(
+        candidate.matchedAccount.id,
+        candidate.transaction.fitid,
+        selectedBankId ? Number(selectedBankId) : undefined
+      );
       setLocallyReconciledFitids((prev) => new Set(prev).add(candidate.transaction.fitid));
       setSelectedFitids((prev) => {
         const next = new Set(prev);
@@ -442,7 +439,7 @@ export const OfxImportModal: React.FC<OfxImportModalProps> = ({
       });
       setFeedback({
         type: 'success',
-        text: `Lançamento "${candidate.matchedAccount.descricao}" aceito e conciliado com sucesso!`,
+        text: `Lançamento "${candidate.matchedAccount.descricao}" aceito e conciliado no banco de dados com sucesso!`,
       });
     } catch (err: any) {
       console.error(err);
@@ -458,7 +455,7 @@ export const OfxImportModal: React.FC<OfxImportModalProps> = ({
     if (isProcessing) return;
     const trn = candidate.transaction;
     setIsProcessing(true);
-    const safetyTimer = setTimeout(() => setIsProcessing(false), 4000);
+    const safetyTimer = setTimeout(() => setIsProcessing(false), 15000);
     try {
       const newAcc: Omit<FinancialAccount, 'id'> = {
         empresa_id: selectedCompanyId,
@@ -480,10 +477,7 @@ export const OfxImportModal: React.FC<OfxImportModalProps> = ({
         excluido: false,
       };
 
-      await Promise.race([
-        onCreateAndReconcile(newAcc),
-        new Promise((resolve) => setTimeout(resolve, 3000)),
-      ]);
+      await onCreateAndReconcile(newAcc);
       setLocallyReconciledFitids((prev) => new Set(prev).add(trn.fitid));
       setSelectedFitids((prev) => {
         const next = new Set(prev);
@@ -492,7 +486,7 @@ export const OfxImportModal: React.FC<OfxImportModalProps> = ({
       });
       setFeedback({
         type: 'success',
-        text: `Lançamento "${trn.memo}" aceito e importado para o sistema com sucesso!`,
+        text: `Lançamento "${trn.memo}" salvo e conciliado no banco de dados com sucesso!`,
       });
     } catch (err: any) {
       console.error(err);
@@ -507,7 +501,7 @@ export const OfxImportModal: React.FC<OfxImportModalProps> = ({
   const handleAcceptSelectedOrAll = async (onlySelected: boolean = true) => {
     if (isProcessing) return;
     setIsProcessing(true);
-    const safetyTimer = setTimeout(() => setIsProcessing(false), 4500);
+    const safetyTimer = setTimeout(() => setIsProcessing(false), 25000);
     try {
       const matchesToReconcile: { accountId: number; fitid: string; bankId?: number }[] = [];
       const newAccountsToCreate: Omit<FinancialAccount, 'id'>[] = [];
@@ -565,10 +559,7 @@ export const OfxImportModal: React.FC<OfxImportModalProps> = ({
         }
       });
 
-      await Promise.race([
-        onBatchReconcile(matchesToReconcile, newAccountsToCreate),
-        new Promise((resolve) => setTimeout(resolve, 3500)),
-      ]);
+      await onBatchReconcile(matchesToReconcile, newAccountsToCreate);
 
       setLocallyReconciledFitids((prev) => {
         const next = new Set(prev);
@@ -579,7 +570,7 @@ export const OfxImportModal: React.FC<OfxImportModalProps> = ({
 
       setFeedback({
         type: 'success',
-        text: `Parabéns! ${candidatesToProcess.length} lançamento(s) foram aceitos com sucesso! (${matchesToReconcile.length} conciliados com existentes e ${newAccountsToCreate.length} novos cadastrados).`,
+        text: `Parabéns! ${candidatesToProcess.length} lançamento(s) salvos e conciliados no banco de dados com sucesso! (${matchesToReconcile.length} conciliados com existentes e ${newAccountsToCreate.length} novos cadastrados).`,
       });
     } catch (err: any) {
       console.error(err);
@@ -594,7 +585,7 @@ export const OfxImportModal: React.FC<OfxImportModalProps> = ({
   const handleBatchAutoReconcile = async () => {
     if (isProcessing) return;
     setIsProcessing(true);
-    const safetyTimer = setTimeout(() => setIsProcessing(false), 4500);
+    const safetyTimer = setTimeout(() => setIsProcessing(false), 25000);
     try {
       const matchesToReconcile: { accountId: number; fitid: string; bankId?: number }[] = [];
       const newAccountsToCreate: Omit<FinancialAccount, 'id'>[] = [];
@@ -620,10 +611,7 @@ export const OfxImportModal: React.FC<OfxImportModalProps> = ({
         return;
       }
 
-      await Promise.race([
-        onBatchReconcile(matchesToReconcile, newAccountsToCreate),
-        new Promise((resolve) => setTimeout(resolve, 3500)),
-      ]);
+      await onBatchReconcile(matchesToReconcile, newAccountsToCreate);
       setLocallyReconciledFitids((prev) => {
         const next = new Set(prev);
         fitidsProcessed.forEach((f) => next.add(f));
@@ -632,7 +620,7 @@ export const OfxImportModal: React.FC<OfxImportModalProps> = ({
 
       setFeedback({
         type: 'success',
-        text: `${matchesToReconcile.length} lançamento(s) identificados foram conciliados e atualizados com sucesso!`,
+        text: `${matchesToReconcile.length} lançamento(s) identificados foram conciliados e salvos no banco de dados com sucesso!`,
       });
     } catch (err: any) {
       console.error(err);

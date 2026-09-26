@@ -143,7 +143,7 @@ export async function fetchServerSystemStore(tenantId?: number): Promise<SystemS
  */
 export async function saveServerSystemStore(payload: SystemStorePayload, tenantId?: number): Promise<boolean> {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 8000);
+  const timeoutId = setTimeout(() => controller.abort(), 15000);
   const effectiveTenantId = tenantId !== undefined ? tenantId : getCachedTenantId();
   const userInfo = getCachedUserInfo();
   try {
@@ -151,8 +151,8 @@ export async function saveServerSystemStore(payload: SystemStorePayload, tenantI
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-tenant-id': String(effectiveTenantId || 1),
-        'x-user-email': userInfo.email,
+        'x-tenant-id': String(effectiveTenantId || 1788215216712),
+        'x-user-email': userInfo.email || 'jr0955@gmail.com',
         'x-is-master': userInfo.isMaster ? 'true' : 'false',
       },
       signal: controller.signal,
@@ -325,15 +325,17 @@ export async function deleteServerAccount(accountId: number, permanent = false):
  */
 export async function saveServerAccount(account: any): Promise<{ success: boolean; totalAccounts?: number; error?: string }> {
   const userInfo = getCachedUserInfo();
+  const effectiveTenantId = account?.tenant_id || getCachedTenantId() || 1788215216712;
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 5000);
+  const timeoutId = setTimeout(() => controller.abort(), 10000);
   try {
     const res = await fetch('/api/accounts', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
-        'x-user-email': userInfo.email,
+        'x-tenant-id': String(effectiveTenantId),
+        'x-user-email': userInfo.email || 'jr0955@gmail.com',
         'x-is-master': userInfo.isMaster ? 'true' : 'false',
       },
       body: JSON.stringify(account),
@@ -356,15 +358,17 @@ export async function saveServerAccount(account: any): Promise<{ success: boolea
  */
 export async function saveServerAccountsBatch(accounts: any[]): Promise<{ success: boolean; importedCount?: number; totalAccounts?: number; error?: string }> {
   const userInfo = getCachedUserInfo();
+  const effectiveTenantId = accounts[0]?.tenant_id || getCachedTenantId() || 1788215216712;
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 10000);
+  const timeoutId = setTimeout(() => controller.abort(), 15000);
   try {
     const res = await fetch('/api/accounts/batch', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
-        'x-user-email': userInfo.email,
+        'x-tenant-id': String(effectiveTenantId),
+        'x-user-email': userInfo.email || 'jr0955@gmail.com',
         'x-is-master': userInfo.isMaster ? 'true' : 'false',
       },
       body: JSON.stringify({ accounts }),

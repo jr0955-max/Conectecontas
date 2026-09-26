@@ -41,6 +41,17 @@ function ensureServerDataDir() {
   if (!fs.existsSync(SERVER_DATA_DIR)) {
     fs.mkdirSync(SERVER_DATA_DIR, { recursive: true });
   }
+  if (!fs.existsSync(SYSTEM_STORE_PATH)) {
+    const baselinePath = path.join(SERVER_DATA_DIR, "system_store_baseline.json");
+    if (fs.existsSync(baselinePath)) {
+      try {
+        fs.copyFileSync(baselinePath, SYSTEM_STORE_PATH);
+        console.log("📦 [server.ts] Base de dados restaurada com sucesso a partir de system_store_baseline.json");
+      } catch (e) {
+        console.warn("Aviso ao copiar baseline:", e);
+      }
+    }
+  }
 }
 
 function readLocalBankingCredentials(): any[] {
@@ -3883,6 +3894,14 @@ async function startServer() {
       store.updatedAt = new Date().toISOString();
       fs.writeFileSync(SYSTEM_STORE_PATH, JSON.stringify(store, null, 2), "utf8");
 
+      // Sincronização não-bloqueante no Firestore
+      (async () => {
+        try {
+          const accRef = doc(db, "accounts", String(account.id));
+          await setDoc(accRef, account, { merge: true });
+        } catch (e) {}
+      })();
+
       console.log(`✅ [POST /api/accounts] Conta #${account.id} salva no servidor (${account.descricao})`);
       return res.status(200).json({ success: true, account, totalAccounts: store.accounts.length });
     } catch (err: any) {
@@ -3921,6 +3940,22 @@ async function startServer() {
       store.hasCustomData = true;
       store.updatedAt = new Date().toISOString();
       fs.writeFileSync(SYSTEM_STORE_PATH, JSON.stringify(store, null, 2), "utf8");
+
+      // Sincronização não-bloqueante no Firestore em lotes de 400
+      (async () => {
+        try {
+          for (let i = 0; i < incomingBatch.length; i += 400) {
+            const batch = writeBatch(db);
+            const chunk = incomingBatch.slice(i, i + 400);
+            chunk.forEach((a: any) => {
+              if (a && a.id) {
+                batch.set(doc(db, "accounts", String(a.id)), a, { merge: true });
+              }
+            });
+            await batch.commit();
+          }
+        } catch (e) {}
+      })();
 
       console.log(`✅ [POST /api/accounts/batch] ${incomingBatch.length} contas importadas com sucesso! Total no servidor: ${store.accounts.length}`);
       return res.status(200).json({
@@ -4010,6 +4045,15 @@ async function startServer() {
         expiracao: "2099-12-31",
         plano: "Enterprise",
         criado_em: "2025-01-01",
+      });
+      tenantMap.set(1788215216712, {
+        id: 1788215216712,
+        nome: "Lave & Pegue - Lourenço Junior",
+        email: "jr0955@gmail.com",
+        status: "ativo",
+        expiracao: "2099-12-31",
+        plano: "Enterprise",
+        criado_em: "2026-08-31",
       });
 
       // Se a requisição vem do Master com lista de tenants explícita
@@ -4230,12 +4274,13 @@ async function startServer() {
     try {
       const zip = new AdmZip();
       const projectRoot = process.cwd();
-      const excluded = new Set(["node_modules", "dist", ".git", ".dev.env.json", ".dev.pid", "server_data"]);
+      const excluded = new Set(["node_modules", "dist", ".git", ".dev.env.json", ".dev.pid"]);
 
       function addFolderRecursive(dirPath: string, zipPath: string) {
         const entries = fs.readdirSync(dirPath, { withFileTypes: true });
         for (const entry of entries) {
           if (excluded.has(entry.name)) continue;
+          if (entry.name === "backups") continue; // Não inclui pasta de backups para não inflar o ZIP
           const fullPath = path.join(dirPath, entry.name);
           const zipEntryPath = zipPath ? `${zipPath}/${entry.name}` : entry.name;
           if (entry.isDirectory()) {

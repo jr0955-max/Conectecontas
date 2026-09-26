@@ -550,7 +550,7 @@ export default function App() {
           // 2. Merge inteligente de Contas (PROTEÇÃO CRÍTICA ANTI-PERDA DE DADOS)
           if (Array.isArray(sData.accounts)) {
             const serverClearedAt = Number((sData as any).clearedAccountsTimestamp || 0);
-            const isExplicitEmpty = sData.accounts.length === 0 && (Boolean(sData.hasCustomData) || serverClearedAt > 0);
+            const isExplicitEmpty = sData.accounts.length === 0 && serverClearedAt > 0;
 
             if (isExplicitEmpty) {
               console.log('🧹 [App.tsx] O servidor indicou que os lançamentos estão zerados. Limpando cache local.');
@@ -722,14 +722,9 @@ export default function App() {
           setCompanies(data.companies);
           localStorage.setItem('fin_companies', JSON.stringify(data.companies));
         }
-        if (Array.isArray(data.accounts)) {
-          if (data.accounts.length === 0 && Boolean((data as any).hasCustomData)) {
-            setAccounts([]);
-            localStorage.setItem('fin_accounts', JSON.stringify([]));
-          } else if (data.accounts.length > 0) {
-            setAccounts(data.accounts);
-            localStorage.setItem('fin_accounts', JSON.stringify(data.accounts));
-          }
+        if (Array.isArray(data.accounts) && data.accounts.length > 0) {
+          setAccounts(data.accounts);
+          localStorage.setItem('fin_accounts', JSON.stringify(data.accounts));
         }
         setCloudSynced(true);
       } catch (e) {
@@ -784,7 +779,7 @@ export default function App() {
     // 4. Subscribe to cloud accounts (Always sync instantly on delete/add/edit)
     const unsubAccounts = subscribeToAccounts((cloudAccs) => {
       if (Date.now() - lastRestoredTimestampRef.current < 30000) return;
-      if (Array.isArray(cloudAccs)) {
+      if (Array.isArray(cloudAccs) && cloudAccs.length > 0) {
         const fixedCloudAccs = cloudAccs.map((a) => {
           if (a && Number(a.id) >= 1790300442952 && Number(a.id) <= 1790300442980 && Number(a.empresa_id) === 1788215217113) {
             return { ...a, empresa_id: 1788220409638 };
@@ -1928,6 +1923,18 @@ export default function App() {
     };
     setAccounts((prev) => [accountToAdd, ...prev]);
     saveServerAccount(accountToAdd).catch((err) => console.warn('Erro ao salvar conta no servidor central:', err));
+    saveServerSystemStore({
+      hasCustomData: true,
+      companies,
+      accounts: [accountToAdd, ...accounts],
+      users,
+      userCompanies,
+      bankAccounts,
+      costCenters,
+      tenants,
+      auditLogs,
+      source: 'add_account_instant',
+    }).catch(() => {});
     saveCloudAccount(accountToAdd).catch((err) => console.warn('Erro ao salvar conta na nuvem:', err));
 
     // Audit Log
@@ -1953,8 +1960,21 @@ export default function App() {
       atualizado_por: currentUser?.nome || 'Admin',
       atualizado_em: new Date().toISOString(),
     };
-    setAccounts((prev) => prev.map((a) => (Number(a.id) === Number(sanitized.id) ? sanitized : a)));
+    const nextAccs = accounts.map((a) => (Number(a.id) === Number(sanitized.id) ? sanitized : a));
+    setAccounts(nextAccs);
     saveServerAccount(sanitized).catch((err) => console.warn('Erro ao atualizar conta no servidor central:', err));
+    saveServerSystemStore({
+      hasCustomData: true,
+      companies,
+      accounts: nextAccs,
+      users,
+      userCompanies,
+      bankAccounts,
+      costCenters,
+      tenants,
+      auditLogs,
+      source: 'edit_account_instant',
+    }).catch(() => {});
     saveCloudAccount(sanitized).catch((err) => console.warn('Erro ao editar conta na nuvem:', err));
 
     // Audit Log
@@ -1972,22 +1992,38 @@ export default function App() {
 
   const handleToggleStatus = (id: number) => {
     let updatedAcc: FinancialAccount | null = null;
-    setAccounts((prev) =>
-      prev.map((acc) => {
+    let nextAccs: FinancialAccount[] = [];
+    setAccounts((prev) => {
+      nextAccs = prev.map((acc) => {
         if (Number(acc.id) === Number(id)) {
           const updated: FinancialAccount = acc.tipo === 'pagar'
             ? { ...acc, status: acc.status === 'Pago' ? 'Pendente' : 'Pago', atualizado_por: currentUser?.nome || 'Admin', atualizado_em: new Date().toISOString() }
             : { ...acc, status: acc.status === 'Recebido' ? 'Pendente' : 'Recebido', atualizado_por: currentUser?.nome || 'Admin', atualizado_em: new Date().toISOString() };
           updatedAcc = updated;
-          saveCloudAccount(updated).catch((err) => console.warn('Erro ao alternar status na nuvem:', err));
           return updated;
         }
         return acc;
-      })
-    );
+      });
+      return nextAccs;
+    });
 
     if (updatedAcc) {
       const ua = updatedAcc as FinancialAccount;
+      saveServerAccount(ua).catch((err) => console.warn('Erro ao salvar status no servidor:', err));
+      saveServerSystemStore({
+        hasCustomData: true,
+        companies,
+        accounts: nextAccs,
+        users,
+        userCompanies,
+        bankAccounts,
+        costCenters,
+        tenants,
+        auditLogs,
+        source: 'toggle_status_instant',
+      }).catch(() => {});
+      saveCloudAccount(ua).catch((err) => console.warn('Erro ao alternar status na nuvem:', err));
+
       const isSettled = ua.status === 'Pago' || ua.status === 'Recebido';
       saveCloudAuditLog({
         acao: isSettled ? 'BAIXA_PAGAMENTO' : 'REVERSAO_PAGAMENTO',
@@ -2900,6 +2936,19 @@ export default function App() {
     });
 
     setAccounts((prev) => [...createdAccounts, ...prev]);
+    saveServerAccountsBatch(createdAccounts).catch((err) => console.warn('Erro ao salvar lote no servidor:', err));
+    saveServerSystemStore({
+      hasCustomData: true,
+      companies,
+      accounts: [...createdAccounts, ...accounts],
+      users,
+      userCompanies,
+      bankAccounts,
+      costCenters,
+      tenants,
+      auditLogs,
+      source: 'batch_add_accounts_instant',
+    }).catch(() => {});
     await saveCloudAccountsBatch(createdAccounts).catch((err) => console.warn('Erro ao salvar lote na nuvem:', err));
 
     await saveCloudAuditLog({
@@ -2932,7 +2981,19 @@ export default function App() {
     setAccounts(nextAccounts);
     localStorage.setItem('fin_accounts', JSON.stringify(nextAccounts));
 
-    saveServerAccount(updated).catch((e) => console.warn('Erro ao salvar conta conciliada no servidor:', e));
+    await saveServerAccount(updated).catch((e) => console.warn('Erro ao salvar conta conciliada no servidor:', e));
+    saveServerSystemStore({
+      hasCustomData: true,
+      companies,
+      accounts: nextAccounts,
+      users,
+      userCompanies,
+      bankAccounts,
+      costCenters,
+      tenants,
+      auditLogs,
+      source: 'ofx_single_reconcile_direct',
+    }).catch(() => {});
     saveCloudAccount(updated).catch((err) => console.warn('Aviso ao conciliar conta na nuvem:', err));
     saveCloudAuditLog({
       acao: 'CONCILIACAO_BANCARIA',
@@ -2966,7 +3027,19 @@ export default function App() {
     setAccounts(nextAccounts);
     localStorage.setItem('fin_accounts', JSON.stringify(nextAccounts));
 
-    saveServerAccount(created).catch((e) => console.warn('Erro ao salvar nova conta no servidor central:', e));
+    await saveServerAccount(created).catch((e) => console.warn('Erro ao salvar nova conta no servidor central:', e));
+    saveServerSystemStore({
+      hasCustomData: true,
+      companies,
+      accounts: nextAccounts,
+      users,
+      userCompanies,
+      bankAccounts,
+      costCenters,
+      tenants,
+      auditLogs,
+      source: 'ofx_create_reconcile_direct',
+    }).catch(() => {});
     saveCloudAccount(created).catch((err) => console.warn('Aviso ao salvar nova conta na nuvem:', err));
     saveCloudAuditLog({
       acao: 'CRIACAO',
@@ -3027,29 +3100,39 @@ export default function App() {
       ...Array.from(accountsMap.values())
     ];
 
-    // Atualização local imediata
+    // Atualização de estado imediata
     setAccounts(finalAccountsList);
     localStorage.setItem('fin_accounts', JSON.stringify(finalAccountsList));
 
-    // Salva diretamente no servidor central (Node)
+    // Salva diretamente e obrigatoriamente no banco de dados do servidor central
+    const serverSaveTasks: Promise<any>[] = [];
     if (createdFromOfx.length > 0) {
-      saveServerAccountsBatch(createdFromOfx).catch((e) => console.warn('Erro ao salvar lote de novas contas no servidor:', e));
+      serverSaveTasks.push(saveServerAccountsBatch(createdFromOfx));
     }
     if (updatedAccounts.length > 0) {
-      saveServerAccountsBatch(updatedAccounts).catch((e) => console.warn('Erro ao salvar lote de contas atualizadas no servidor:', e));
+      serverSaveTasks.push(saveServerAccountsBatch(updatedAccounts));
     }
-    saveServerSystemStore({
-      hasCustomData: true,
-      companies,
-      accounts: finalAccountsList,
-      users,
-      userCompanies,
-      bankAccounts,
-      costCenters,
-      tenants,
-      auditLogs,
-      source: 'ofx_batch_reconcile',
-    }).catch((e) => console.warn('Aviso ao sincronizar lote OFX no servidor:', e));
+    serverSaveTasks.push(
+      saveServerSystemStore({
+        hasCustomData: true,
+        companies,
+        accounts: finalAccountsList,
+        users,
+        userCompanies,
+        bankAccounts,
+        costCenters,
+        tenants,
+        auditLogs,
+        source: 'ofx_batch_reconcile_direct',
+      })
+    );
+
+    try {
+      await Promise.all(serverSaveTasks);
+      console.log(`✅ [App.tsx] ${createdFromOfx.length + updatedAccounts.length} movimentações OFX persistidas com sucesso no banco de dados do servidor!`);
+    } catch (saveErr) {
+      console.error('Erro ao persistir movimentações OFX no servidor:', saveErr);
+    }
 
     // Sincronização em nuvem sem bloquear UI
     if (updatedAccounts.length > 0) {
