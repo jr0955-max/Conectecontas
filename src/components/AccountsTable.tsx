@@ -47,9 +47,12 @@ import {
   Send,
   FileText,
   Camera,
+  Sparkles,
+  Lightbulb,
 } from 'lucide-react';
 import { BankPaymentModal } from './BankPaymentModal';
 import { CameraScannerModal } from './CameraScannerModal';
+import { suggestCategoryFromHistory, CategorySuggestionResult } from '../utils/categorySuggestion';
 
 interface AccountsTableProps {
   accounts: FinancialAccount[];
@@ -76,6 +79,8 @@ interface AccountsTableProps {
   onOpenWebhookSimulator?: () => void;
   forcedTab?: 'all' | 'pagar' | 'receber';
   isConsolidated?: boolean;
+  onClearAllAccounts?: () => Promise<void>;
+  onOpenResetModal?: () => void;
 }
 
 export const AccountsTable: React.FC<AccountsTableProps> = ({
@@ -93,6 +98,8 @@ export const AccountsTable: React.FC<AccountsTableProps> = ({
   onOpenCsvModal,
   onSelectCompany,
   onOpenAccountHistory,
+  onClearAllAccounts,
+  onOpenResetModal,
   onOpenRecurringModal,
   onOpenOfxModal,
   onOpenBankAccountsModal,
@@ -126,6 +133,8 @@ export const AccountsTable: React.FC<AccountsTableProps> = ({
   // Banking Payment Modal & Receipt Modal state
   const [payingAccount, setPayingAccount] = useState<FinancialAccount | null>(null);
   const [viewingReceiptAccount, setViewingReceiptAccount] = useState<FinancialAccount | null>(null);
+  const [showClearConfirmModal, setShowClearConfirmModal] = useState<boolean>(false);
+  const [isClearingAccounts, setIsClearingAccounts] = useState<boolean>(false);
 
   // Edit Account Modal state
   const [editingAccount, setEditingAccount] = useState<FinancialAccount | null>(null);
@@ -174,6 +183,52 @@ export const AccountsTable: React.FC<AccountsTableProps> = ({
   );
   const [status, setStatus] = useState<AccountStatus>('Pendente');
   const [selectedCategoria, setSelectedCategoria] = useState('Geral');
+  const [hasUserManuallySelectedCategory, setHasUserManuallySelectedCategory] = useState(false);
+  const [lastAutoAppliedCategory, setLastAutoAppliedCategory] = useState<string | null>(null);
+
+  // Sugestão em tempo real da categoria mais frequente baseada no histórico de descrições
+  const categorySuggestion = useMemo<CategorySuggestionResult | null>(() => {
+    return suggestCategoryFromHistory(
+      accounts,
+      descricao,
+      activeTab === 'all' ? formTipo : activeTab
+    );
+  }, [accounts, descricao, activeTab, formTipo]);
+
+  // Aplica a categoria sugerida e garante que ela conste na lista
+  const handleApplyCategorySuggestion = (suggestedCat: string, isAuto: boolean = false) => {
+    if (!suggestedCat) return;
+
+    if (!categoryList.includes(suggestedCat)) {
+      const updated = [...categoryList, suggestedCat];
+      setCategoryList(updated);
+      try {
+        localStorage.setItem('fin_custom_categories', JSON.stringify(updated));
+      } catch {}
+    }
+
+    setSelectedCategoria(suggestedCat);
+    if (isAuto) {
+      setLastAutoAppliedCategory(suggestedCat);
+    } else {
+      setHasUserManuallySelectedCategory(true);
+      setLastAutoAppliedCategory(null);
+    }
+  };
+
+  // Efeito para sugerir e aplicar automaticamente caso o usuário não tenha selecionado uma categoria manualmente
+  useEffect(() => {
+    if (!hasUserManuallySelectedCategory && categorySuggestion) {
+      if (selectedCategoria === 'Geral' || selectedCategoria === lastAutoAppliedCategory) {
+        if (categorySuggestion.category !== 'Geral') {
+          handleApplyCategorySuggestion(categorySuggestion.category, true);
+        }
+      }
+    } else if (!descricao.trim() && lastAutoAppliedCategory && selectedCategoria === lastAutoAppliedCategory) {
+      setSelectedCategoria('Geral');
+      setLastAutoAppliedCategory(null);
+    }
+  }, [categorySuggestion, descricao, hasUserManuallySelectedCategory]);
   const [selectedBancoId, setSelectedBancoId] = useState<string>('');
   const [selectedCentroCustoId, setSelectedCentroCustoId] = useState<string>('');
   const [formChavePix, setFormChavePix] = useState('');
@@ -507,6 +562,26 @@ export const AccountsTable: React.FC<AccountsTableProps> = ({
                   </button>
                 )}
               </div>
+            )}
+
+            {/* Botão de Destaque: Limpar Lançamentos */}
+            {(onOpenResetModal || onClearAllAccounts) && (
+              <button
+                type="button"
+                id="btn-quick-tools-clear"
+                onClick={() => {
+                  if (onOpenResetModal) {
+                    onOpenResetModal();
+                  } else {
+                    setShowClearConfirmModal(true);
+                  }
+                }}
+                className="px-2.5 py-1.5 text-xs font-bold rounded-lg bg-rose-50 dark:bg-rose-950/60 hover:bg-rose-100 dark:hover:bg-rose-900/60 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800/60 transition-colors flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                title="Limpar ou Zerar Lançamentos Financeiros de Teste"
+              >
+                <Trash2 className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400" />
+                <span>Limpar Lançamentos</span>
+              </button>
             )}
 
             {/* Toggle Type Selector Pills */}
@@ -887,8 +962,8 @@ export const AccountsTable: React.FC<AccountsTableProps> = ({
               )}
             </div>
 
-            {/* Quick Status Filter Pills */}
-            <div className="flex items-center gap-1.5">
+            {/* Quick Status Filter Pills & Limpar Lançamentos */}
+            <div className="flex items-center gap-2 flex-wrap">
               <div className="inline-flex rounded-lg p-0.5 bg-gray-100 dark:bg-slate-800 border border-gray-200 dark:border-slate-700">
                 {['Todos', 'Pendente', activeTab === 'receber' ? 'Recebido' : 'Pago'].map((st) => (
                   <button
@@ -904,6 +979,25 @@ export const AccountsTable: React.FC<AccountsTableProps> = ({
                   </button>
                 ))}
               </div>
+
+              {(onOpenResetModal || onClearAllAccounts) && (
+                <button
+                  type="button"
+                  id="btn-header-clear-accounts"
+                  onClick={() => {
+                    if (onOpenResetModal) {
+                      onOpenResetModal();
+                    } else {
+                      setShowClearConfirmModal(true);
+                    }
+                  }}
+                  className="px-2.5 py-1 text-[11px] font-bold rounded-lg border border-rose-300 dark:border-rose-900 bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/60 dark:hover:bg-rose-900/80 text-rose-700 dark:text-rose-300 flex items-center gap-1.5 transition-colors cursor-pointer shadow-2xs"
+                  title="Limpar ou Zerar Lançamentos Financeiros"
+                >
+                  <Trash2 className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400" />
+                  <span>Limpar Lançamentos</span>
+                </button>
+              )}
             </div>
           </div>
 
@@ -979,6 +1073,25 @@ export const AccountsTable: React.FC<AccountsTableProps> = ({
                   <option key={m} value={m}>{m}</option>
                 ))}
               </select>
+            )}
+
+            {(onOpenResetModal || onClearAllAccounts) && accounts.filter(a => !a.excluido).length > 0 && (
+              <button
+                type="button"
+                id="btn-quick-clear-accounts"
+                onClick={() => {
+                  if (onOpenResetModal) {
+                    onOpenResetModal();
+                  } else {
+                    setShowClearConfirmModal(true);
+                  }
+                }}
+                className="text-xs py-1.5 px-3 rounded-lg border border-rose-300 dark:border-rose-900 bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/60 dark:hover:bg-rose-900/80 text-rose-700 dark:text-rose-300 flex items-center gap-1.5 cursor-pointer transition-colors shadow-2xs font-semibold ml-auto"
+                title="Limpar todos os lançamentos financeiros da sessão"
+              >
+                <Trash2 className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400" />
+                <span>Limpar Lançamentos</span>
+              </button>
             )}
           </div>
 
@@ -1723,6 +1836,55 @@ export const AccountsTable: React.FC<AccountsTableProps> = ({
           }
         }}
       />
+
+      {/* In-app Confirmation Modal for Limpar Lançamentos */}
+      {showClearConfirmModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-rose-200 dark:border-rose-900/60 p-6 max-w-md w-full shadow-2xl space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-rose-100 dark:bg-rose-950/80 text-rose-600 dark:text-rose-400 flex items-center justify-center border border-rose-200 dark:border-rose-900/60">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-gray-900 dark:text-white">Limpar Lançamentos</h3>
+                <p className="text-xs text-gray-500 dark:text-gray-400">Excluir lançamentos financeiros de teste</p>
+              </div>
+            </div>
+
+            <p className="text-xs text-gray-600 dark:text-slate-300 bg-rose-50 dark:bg-rose-950/30 p-3.5 rounded-xl border border-rose-100 dark:border-rose-900/40 leading-relaxed">
+              Tem certeza que deseja limpar todos os lançamentos financeiros da sessão? 
+              <br /><strong className="text-rose-700 dark:text-rose-300">Atenção:</strong> Cadastros de empresas, contas bancárias e centros de custo serão mantidos intactos.
+            </p>
+
+            <div className="flex items-center justify-end gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowClearConfirmModal(false)}
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={isClearingAccounts}
+                onClick={async () => {
+                  setIsClearingAccounts(true);
+                  try {
+                    if (onClearAllAccounts) await onClearAllAccounts();
+                  } finally {
+                    setIsClearingAccounts(false);
+                    setShowClearConfirmModal(false);
+                  }
+                }}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white flex items-center gap-2 transition-colors cursor-pointer shadow-md shadow-rose-600/20 disabled:opacity-50"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>{isClearingAccounts ? 'Limpando...' : 'Confirmar e Limpar'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Company, BankAccount, CostCenter, FinancialAccount, AccountType } from '../types';
 import { 
   generateInstallmentAccounts, 
@@ -47,7 +47,18 @@ export const RecurringInstallmentModal: React.FC<RecurringInstallmentModalProps>
 
   // Form state
   const [tipo, setTipo] = useState<AccountType>('pagar');
-  const [empresaId, setEmpresaId] = useState<number>(activeCompanyId > 0 ? activeCompanyId : (companies[0]?.id || 1));
+  const [empresaId, setEmpresaId] = useState<number>(activeCompanyId > 0 ? Number(activeCompanyId) : (Number(companies[0]?.id) || 1));
+
+  // Sincroniza a empresa sempre que o modal abre ou activeCompanyId muda
+  useEffect(() => {
+    if (isOpen) {
+      if (activeCompanyId > 0 && companies.some((c) => Number(c.id) === Number(activeCompanyId))) {
+        setEmpresaId(Number(activeCompanyId));
+      } else if (companies.length > 0 && !companies.some((c) => Number(c.id) === Number(empresaId))) {
+        setEmpresaId(Number(companies[0].id));
+      }
+    }
+  }, [isOpen, activeCompanyId, companies]);
   const [descricao, setDescricao] = useState('');
   const [categoria, setCategoria] = useState('Serviços');
   const [bancoId, setBancoId] = useState<string>('');

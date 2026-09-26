@@ -80,6 +80,11 @@ export function parseOFX(ofxContent: string): OFXStatement {
       valor = parseFloat(cleanAmt) || 0;
     }
 
+    // Skip zero amount or informational balance marker transactions (e.g. Banco do Brasil "Saldo do dia", "Saldo Anterior")
+    if (Math.abs(valor) < 0.001) {
+      continue;
+    }
+
     // Determine Credit or Debit
     let tipo: 'DEBIT' | 'CREDIT' | 'OTHER' = 'OTHER';
     if (valor < 0 || rawType === 'DEBIT') {
@@ -105,9 +110,18 @@ export function parseOFX(ofxContent: string): OFXStatement {
     else if (nameMatch && nameMatch[1]) memo = cleanOFXText(nameMatch[1].trim());
     else memo = tipo === 'CREDIT' ? 'Entrada / Depósito' : 'Pagamento / Despesa';
 
+    // Ignore balance marker pseudo-transactions even if non-zero
+    if (/^(saldo\s+(do\s+dia|anterior|final|bloqueado)|s\s*a\s*l\s*d\s*o)$/i.test(memo.trim())) {
+      continue;
+    }
+
     // CHECKNUM / REFNUM
     const checkMatch = block.match(/<CHECKNUM>(.*?)(?:<\/?CHECKNUM>|\r?\n)/i);
     const refMatch = block.match(/<REFNUM>(.*?)(?:<\/?REFNUM>|\r?\n)/i);
+    const checknumVal = checkMatch ? checkMatch[1].trim() : undefined;
+
+    // Detect automatic sweep / overnight investments (e.g. BB Rende Fácil, Aplicação Automática)
+    const sweepInfo = isBankSweepTransaction(memo, checknumVal);
 
     transactions.push({
       id: `trn_${fitid || counter}`,
@@ -116,10 +130,12 @@ export function parseOFX(ofxContent: string): OFXStatement {
       valor: Math.abs(valor), // Store positive magnitude, signed check via `tipo`
       data: dateStr,
       memo,
-      checknum: checkMatch ? checkMatch[1].trim() : undefined,
+      checknum: checknumVal,
       refnum: refMatch ? refMatch[1].trim() : undefined,
       banco_nome,
       conta_numero: numero_conta,
+      isSweep: sweepInfo.isSweep,
+      sweepType: sweepInfo.sweepType,
     });
 
     counter++;
@@ -230,6 +246,7 @@ export function parseBankCSV(csvContent: string): OFXStatement {
 
     const tipo: 'DEBIT' | 'CREDIT' = isNegative ? 'DEBIT' : 'CREDIT';
     const fitid = idIdx !== -1 && cols[idIdx] ? cols[idIdx] : `csv_${formattedDate}_${i}_${numVal}`;
+    const sweepInfo = isBankSweepTransaction(memo);
 
     transactions.push({
       id: `trn_csv_${i}`,
@@ -238,6 +255,8 @@ export function parseBankCSV(csvContent: string): OFXStatement {
       valor: Math.abs(numVal),
       data: formattedDate,
       memo,
+      isSweep: sweepInfo.isSweep,
+      sweepType: sweepInfo.sweepType,
     });
   }
 
@@ -245,4 +264,39 @@ export function parseBankCSV(csvContent: string): OFXStatement {
     banco_nome: 'Extrato Bancário CSV',
     transacoes: transactions,
   };
+}
+
+/**
+ * Detecta se uma transação de extrato bancário é uma aplicação ou resgate automático
+ * de investimento / saldo livre (ex: BB Rende Fácil, Invest Fácil, Aplicação Automática, etc.).
+ * No Banco do Brasil, o código de documento é frequentemente 9.903 e o histórico é "Rende Facil" / "BB Rende Fácil".
+ */
+export function isBankSweepTransaction(memo: string, checknum?: string): { isSweep: boolean; sweepType?: 'aplicacao' | 'resgate' } {
+  const m = (memo || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const chk = (checknum || '').trim();
+
+  // Banco do Brasil: checknum 9.903 é o documento padrão de "BB Rende Fácil"
+  const isBBDoc = chk === '9.903' || chk === '9903';
+  const isBBRendeFacil = isBBDoc || m.includes('rende facil') || m.includes('rende facil') || m.includes('cdb automatico') || m.includes('bb aplic compe') || m.includes('bb resg autom') || m.includes('bb aplic autom');
+
+  const isOtherSweep = 
+    m.includes('aplicacao automatica') || 
+    m.includes('resgate automatico') || 
+    m.includes('invest facil') || 
+    m.includes('poupanca automatica') ||
+    m.includes('apl.autom') || 
+    m.includes('resg.autom') ||
+    m.includes('apl automatica') ||
+    m.includes('resg automatico') ||
+    m.includes('aplic automatic');
+
+  if (isBBRendeFacil || isOtherSweep) {
+    const isResgate = m.includes('resg') || m.includes('resgate');
+    return {
+      isSweep: true,
+      sweepType: isResgate ? 'resgate' : 'aplicacao',
+    };
+  }
+
+  return { isSweep: false };
 }

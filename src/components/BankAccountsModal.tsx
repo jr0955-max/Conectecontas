@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { BankAccount, FinancialAccount, Company, BankAccountType } from '../types';
 import { 
   Building2, 
@@ -63,14 +63,25 @@ export const BankAccountsModal: React.FC<BankAccountsModalProps> = ({
   const [cor, setCor] = useState('#2563eb');
   const [descricao, setDescricao] = useState('');
   const [padrao, setPadrao] = useState(false);
-  const [empresaId, setEmpresaId] = useState<number>(activeCompanyId > 0 ? activeCompanyId : (companies[0]?.id || 1));
+  const [empresaId, setEmpresaId] = useState<number>(activeCompanyId > 0 ? Number(activeCompanyId) : (Number(companies[0]?.id) || 1));
+
+  // Sincroniza a empresa ativa quando o modal abre ou activeCompanyId muda
+  useEffect(() => {
+    if (isOpen) {
+      if (activeCompanyId > 0 && companies.some((c) => Number(c.id) === Number(activeCompanyId))) {
+        setEmpresaId(Number(activeCompanyId));
+      } else if (companies.length > 0 && !companies.some((c) => Number(c.id) === Number(empresaId))) {
+        setEmpresaId(Number(companies[0].id));
+      }
+    }
+  }, [isOpen, activeCompanyId, companies]);
   const [isSaving, setIsSaving] = useState(false);
   const [feedbackMsg, setFeedbackMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   // Filter bank accounts for current company or all
   const filteredBanks = useMemo(() => {
     if (activeCompanyId > 0) {
-      return bankAccounts.filter((b) => b.empresa_id === activeCompanyId);
+      return bankAccounts.filter((b) => Number(b.empresa_id) === Number(activeCompanyId));
     }
     return bankAccounts;
   }, [bankAccounts, activeCompanyId]);

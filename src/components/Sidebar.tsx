@@ -32,7 +32,11 @@ import {
   Lock,
   Pencil,
   Plus,
-  Globe
+  Globe,
+  RefreshCw,
+  Sun,
+  Moon,
+  Bell
 } from 'lucide-react';
 import { User, Company, getUserEffectivePermissions } from '../types';
 
@@ -61,6 +65,8 @@ interface SidebarProps {
   onOpenBankingModal?: () => void;
   onOpenWebhookModal?: () => void;
   onOpenSecurityModal?: () => void;
+  onOpenReminderSettings?: () => void;
+  remindersCount?: number;
   onDownloadAppPy: () => void;
   currentUser: User;
   onLogout: () => void;
@@ -72,6 +78,10 @@ interface SidebarProps {
   auditLogsCount?: number;
   isOpenMobile: boolean;
   onCloseMobile: () => void;
+  onForceSync?: () => void;
+  isSyncing?: boolean;
+  darkMode?: boolean;
+  onToggleTheme?: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -109,6 +119,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
   auditLogsCount = 0,
   isOpenMobile,
   onCloseMobile,
+  onForceSync,
+  isSyncing,
+  darkMode,
+  onToggleTheme,
+  onOpenReminderSettings,
+  remindersCount = 0,
 }) => {
   const isMaster = Boolean(
     currentUser?.is_master || 
@@ -135,7 +151,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const hasAuditTools = 
     (onOpenAuditLogModal && permissions.pode_ver_auditoria) ||
     (onOpenTrashModal && permissions.pode_ver_lixeira) ||
-    Boolean(onOpenBackupModal);
+    Boolean(onOpenBackupModal) ||
+    Boolean(onForceSync);
 
   const hasAdminTools = 
     (onOpenMasterModal && isMaster) ||
@@ -194,36 +211,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
         )}
 
-        {/* Botão de Destaque Imediato: Backup Google Drive (Fixo no topo da Sidebar) */}
-        {onOpenBackupModal && (
-          <div className="mx-3 mt-3">
-            <button
-              id="sidebar-quick-backup-drive"
-              onClick={() => {
-                onOpenBackupModal();
-                onCloseMobile();
-              }}
-              className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl bg-gradient-to-r from-sky-950/90 via-sky-900/60 to-slate-900 border border-sky-500/50 hover:border-sky-400 text-sky-200 hover:text-white transition-all shadow-md group cursor-pointer"
-              title="Abrir Backup & Sincronização no Google Drive"
-            >
-              <div className="flex items-center gap-2.5">
-                <div className="w-7 h-7 rounded-lg bg-sky-500/20 border border-sky-400/40 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform">
-                  <HardDrive className="w-4 h-4 text-sky-400" />
-                </div>
-                <div className="text-left">
-                  <p className="text-xs font-bold leading-tight flex items-center gap-1.5">
-                    <span>Backup Google Drive</span>
-                  </p>
-                  <p className="text-[10px] text-sky-400/80 font-normal">Sincronização em Nuvem</p>
-                </div>
-              </div>
-              <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-sky-500/20 text-sky-300 border border-sky-500/40">
-                1-Clique
-              </span>
-            </button>
-          </div>
-        )}
-
         {/* Navigation links */}
         <div className="px-3 py-4 flex-1 overflow-y-auto space-y-5">
           
@@ -255,15 +242,42 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   onChangeView('pagar');
                   onCloseMobile();
                 }}
-                className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer text-left ${
+                className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer text-left ${
                   currentView === 'pagar'
                     ? 'bg-blue-600 text-white shadow-xs'
                     : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
                 }`}
               >
-                <ArrowDownCircle className="w-4 h-4 opacity-90 text-rose-400 shrink-0" />
-                <span>Contas a Pagar</span>
+                <div className="flex items-center gap-3">
+                  <ArrowDownCircle className="w-4 h-4 opacity-90 text-rose-400 shrink-0" />
+                  <span>Contas a Pagar</span>
+                </div>
+                {remindersCount > 0 && (
+                  <span className="text-[10px] font-mono font-bold bg-amber-500/25 text-amber-300 border border-amber-500/40 px-1.5 py-0.2 rounded-full shrink-0">
+                    {remindersCount}
+                  </span>
+                )}
               </button>
+
+              {onOpenReminderSettings && (
+                <button
+                  id="nav-btn-reminders-config"
+                  onClick={() => {
+                    onOpenReminderSettings();
+                    onCloseMobile();
+                  }}
+                  className="w-full flex items-center justify-between px-3 py-2 text-slate-300 hover:text-white hover:bg-slate-800/70 transition-colors rounded-lg text-sm font-medium cursor-pointer text-left group"
+                  title="Configurar Lembretes de Vencimento e Prazo de Antecedência"
+                >
+                  <div className="flex items-center gap-3">
+                    <Bell className="w-4 h-4 opacity-90 text-amber-400 shrink-0 group-hover:scale-110 transition-transform" />
+                    <span>Lembretes Financeiros</span>
+                  </div>
+                  <span className="text-[10px] font-mono font-bold text-slate-400 group-hover:text-amber-300 transition-colors">
+                    Config
+                  </span>
+                </button>
+              )}
 
               <button
                 id="nav-btn-receber"
@@ -540,6 +554,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     )}
                   </>
                 )}
+
+                {onOpenResetModal && (
+                  <button
+                    id="nav-btn-clear-accounts-financial"
+                    onClick={() => {
+                      onOpenResetModal();
+                      onCloseMobile();
+                    }}
+                    className="w-full flex items-center gap-3 px-3 py-2 text-rose-300 hover:text-rose-100 hover:bg-rose-950/50 transition-colors rounded-lg text-sm font-semibold cursor-pointer text-left border border-rose-900/50 mt-1.5"
+                  >
+                    <Trash2 className="w-4 h-4 text-rose-400 shrink-0" />
+                    <span>Limpar Lançamentos</span>
+                  </button>
+                )}
               </nav>
             </div>
           )}
@@ -608,6 +636,26 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     </div>
                     <span className="text-[10px] font-mono font-bold bg-sky-950/80 text-sky-300 border border-sky-800/60 px-1.5 py-0.5 rounded-full shrink-0">
                       Nuvem
+                    </span>
+                  </button>
+                )}
+
+                {onForceSync && (
+                  <button
+                    id="nav-btn-sync-mobile"
+                    onClick={() => {
+                      onForceSync();
+                      onCloseMobile();
+                    }}
+                    disabled={isSyncing}
+                    className="w-full flex items-center justify-between px-3 py-2 text-slate-300 hover:text-white hover:bg-slate-800/70 transition-colors rounded-lg text-sm font-medium cursor-pointer text-left group disabled:opacity-50"
+                  >
+                    <div className="flex items-center gap-3">
+                      <RefreshCw className={`w-4 h-4 opacity-90 text-emerald-400 shrink-0 ${isSyncing ? 'animate-spin' : 'group-hover:rotate-180 transition-transform duration-500'}`} />
+                      <span>Sincronizar Celular</span>
+                    </div>
+                    <span className="text-[10px] font-mono font-bold bg-emerald-950/80 text-emerald-300 border border-emerald-800/60 px-1.5 py-0.5 rounded-full shrink-0">
+                      {isSyncing ? 'Sync...' : 'Online'}
                     </span>
                   </button>
                 )}
@@ -733,7 +781,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   </>
                 )}
 
-                {onOpenResetModal && (permissions.pode_resetar_banco || isMaster) && (
+                {onOpenResetModal && (permissions.pode_resetar_banco || isMaster || currentUser.role === 'admin' || currentUser.is_admin || permissions.pode_excluir_contas) && (
                   <button
                     id="nav-btn-reset-data"
                     onClick={() => {
@@ -743,7 +791,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     className="w-full flex items-center gap-3 px-3 py-2 text-rose-300/90 hover:text-rose-200 hover:bg-rose-950/40 transition-colors rounded-lg text-sm font-medium cursor-pointer text-left border border-rose-900/30 mt-2"
                   >
                     <Trash2 className="w-4 h-4 opacity-90 text-rose-400 shrink-0" />
-                    <span>Limpar Dados de Teste</span>
+                    <span>Limpar Dados de Teste / Resetar</span>
                   </button>
                 )}
               </nav>
@@ -777,6 +825,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </p>
             </div>
           </div>
+
+          {onToggleTheme && (
+            <button
+              id="sidebar-theme-toggle-btn"
+              onClick={onToggleTheme}
+              className="w-full py-1.5 px-3 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white flex items-center justify-center gap-2 border border-slate-700/60 transition-colors cursor-pointer"
+              title={darkMode ? 'Mudar para tema claro' : 'Mudar para tema escuro'}
+            >
+              {darkMode ? <Sun className="w-3.5 h-3.5 text-amber-400" /> : <Moon className="w-3.5 h-3.5 text-sky-300" />}
+              <span>{darkMode ? 'Tema Claro' : 'Tema Escuro'}</span>
+            </button>
+          )}
 
           {onOpenSecurityModal && (
             <button

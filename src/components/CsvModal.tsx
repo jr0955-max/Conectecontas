@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   X, 
   Download, 
@@ -48,8 +48,22 @@ export const CsvModal: React.FC<CsvModalProps> = ({
 
   // Import states
   const [importTargetCompanyId, setImportTargetCompanyId] = useState<number>(
-    selectedCompanyId > 0 ? selectedCompanyId : (companies[0]?.id || 1)
+    selectedCompanyId > 0 ? Number(selectedCompanyId) : (Number(companies[0]?.id) || 1)
   );
+
+  // Sincroniza as empresas de importação e exportação sempre que o modal abre ou selectedCompanyId muda
+  useEffect(() => {
+    if (isOpen) {
+      if (selectedCompanyId > 0 && companies.some((c) => Number(c.id) === Number(selectedCompanyId))) {
+        setImportTargetCompanyId(Number(selectedCompanyId));
+        setExportCompanyId(Number(selectedCompanyId));
+      } else if (companies.length > 0) {
+        if (!companies.some((c) => Number(c.id) === Number(importTargetCompanyId))) {
+          setImportTargetCompanyId(Number(companies[0].id));
+        }
+      }
+    }
+  }, [isOpen, selectedCompanyId, companies]);
   const [parsedRows, setParsedRows] = useState<Omit<FinancialAccount, 'id'>[]>([]);
   const [importErrors, setImportErrors] = useState<string[]>([]);
   const [fileName, setFileName] = useState<string | null>(null);

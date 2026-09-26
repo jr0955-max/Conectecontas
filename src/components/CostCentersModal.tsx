@@ -59,7 +59,7 @@ export const CostCentersModal: React.FC<CostCentersModalProps> = ({
   // Filter cost centers (empresa_id === 0 applies to all, or match activeCompanyId)
   const filteredCostCenters = useMemo(() => {
     if (activeCompanyId > 0) {
-      return costCenters.filter((cc) => cc.empresa_id === 0 || cc.empresa_id === activeCompanyId);
+      return costCenters.filter((cc) => Number(cc.empresa_id) === 0 || Number(cc.empresa_id) === Number(activeCompanyId));
     }
     return costCenters;
   }, [costCenters, activeCompanyId]);

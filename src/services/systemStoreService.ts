@@ -24,6 +24,8 @@ export interface SystemStorePayload {
   deletedTenantIds?: number[];
   deletedUserId?: number;
   deletedUserIds?: number[];
+  clearedAccountsTimestamp?: number;
+  clearAccounts?: boolean;
   deletedAccountId?: number;
   deletedAccountIds?: number[];
 }
@@ -31,6 +33,7 @@ export interface SystemStorePayload {
 export interface SystemStoreResponse {
   success: boolean;
   hasCustomData: boolean;
+  clearedAccountsTimestamp?: number;
   data?: SystemStorePayload | null;
   updatedAt?: string;
   message?: string;
@@ -164,6 +167,8 @@ export async function saveServerSystemStore(payload: SystemStorePayload, tenantI
         costCenters: payload.costCenters || [],
         tenants: payload.tenants || [],
         auditLogs: payload.auditLogs || [],
+        clearedAccountsTimestamp: payload.clearedAccountsTimestamp,
+        clearAccounts: payload.clearAccounts,
         source: payload.source || 'client_sync',
       }),
     });
@@ -370,6 +375,33 @@ export async function saveServerAccountsBatch(accounts: any[]): Promise<{ succes
   } catch (err: any) {
     clearTimeout(timeoutId);
     console.error('Erro ao salvar lote de contas no servidor:', err);
+    return {
+      success: false,
+      error: err?.message || 'Erro ao comunicar com o servidor central.',
+    };
+  }
+}
+
+/**
+ * Zera definitivamente todos os lançamentos financeiros no servidor
+ */
+export async function clearServerAccounts(): Promise<{ success: boolean; clearedCount?: number; timestamp?: number; error?: string }> {
+  const userInfo = getCachedUserInfo();
+  const effectiveTenantId = getCachedTenantId();
+  try {
+    const res = await fetch('/api/accounts/clear-all', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'x-tenant-id': String(effectiveTenantId || 1),
+        'x-user-email': userInfo.email,
+        'x-is-master': userInfo.isMaster ? 'true' : 'false',
+      },
+    });
+    return await res.json();
+  } catch (err: any) {
+    console.error('Erro ao zerar contas no servidor:', err);
     return {
       success: false,
       error: err?.message || 'Erro ao comunicar com o servidor central.',

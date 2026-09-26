@@ -61,6 +61,39 @@ export const db: Firestore = getFirestore(
 // Cloud status indicators
 export let isCloudConnected = true;
 
+/**
+ * Utilitário seguro para evitar travamento infinito em chamadas ao Firestore
+ * quando o cliente opera em modo offline ou o banco na nuvem está inacessível.
+ */
+export function withCloudTimeout<T>(promise: Promise<T>, ms: number = 2000, fallbackVal?: T): Promise<T> {
+  return new Promise<T>((resolve) => {
+    let completed = false;
+    const timer = setTimeout(() => {
+      if (!completed) {
+        completed = true;
+        resolve(fallbackVal as T);
+      }
+    }, ms);
+
+    promise
+      .then((res) => {
+        if (!completed) {
+          completed = true;
+          clearTimeout(timer);
+          resolve(res);
+        }
+      })
+      .catch((err) => {
+        if (!completed) {
+          completed = true;
+          clearTimeout(timer);
+          console.warn('Operação Firestore rejeitou ou indisponível:', err?.message);
+          resolve(fallbackVal as T);
+        }
+      });
+  });
+}
+
 // Seed initial data to cloud ONLY if database is completely virgin
 export async function seedCloudDataIfEmpty() {
   try {
@@ -1130,105 +1163,158 @@ export async function saveCloudUserCompanyLinks(userId: number, allowedCompanyId
 
 // Account Mutations
 export async function saveCloudAccount(account: FinancialAccount): Promise<void> {
-  const accountId = Number(account.id);
-  const accountRef = doc(db, 'accounts', String(accountId));
-  const payload = sanitizeAccountForFirestore(account);
-  await setDoc(accountRef, payload);
+  try {
+    const accountId = Number(account.id);
+    const accountRef = doc(db, 'accounts', String(accountId));
+    const payload = sanitizeAccountForFirestore(account);
+    await withCloudTimeout(setDoc(accountRef, payload), 2000);
+  } catch (err: any) {
+    console.warn('Aviso ao salvar conta no Firestore:', err?.message);
+  }
 }
 
 export async function deleteCloudAccount(accountId: number): Promise<void> {
-  const accountIdNum = Number(accountId);
-  const accountRef = doc(db, 'accounts', String(accountIdNum));
-  await deleteDoc(accountRef);
+  try {
+    const accountIdNum = Number(accountId);
+    const accountRef = doc(db, 'accounts', String(accountIdNum));
+    await withCloudTimeout(deleteDoc(accountRef), 2000);
+  } catch (err: any) {
+    console.warn('Aviso ao excluir conta no Firestore:', err?.message);
+  }
 }
 
 export async function saveCloudAccountsBatch(accounts: (FinancialAccount | Omit<FinancialAccount, 'id'> & { id: number })[]): Promise<void> {
-  for (let i = 0; i < accounts.length; i += 400) {
-    const batch = writeBatch(db);
-    const chunk = accounts.slice(i, i + 400);
-    for (const acc of chunk) {
-      const accountId = Number(acc.id);
-      const accRef = doc(db, 'accounts', String(accountId));
-      const payload = sanitizeAccountForFirestore(acc as FinancialAccount);
-      batch.set(accRef, payload);
+  try {
+    for (let i = 0; i < accounts.length; i += 400) {
+      const batch = writeBatch(db);
+      const chunk = accounts.slice(i, i + 400);
+      for (const acc of chunk) {
+        const accountId = Number(acc.id);
+        const accRef = doc(db, 'accounts', String(accountId));
+        const payload = sanitizeAccountForFirestore(acc as FinancialAccount);
+        batch.set(accRef, payload);
+      }
+      await withCloudTimeout(batch.commit(), 2500);
     }
-    await batch.commit();
+  } catch (err: any) {
+    console.warn('Aviso ao salvar lote de contas no Firestore:', err?.message);
   }
 }
 
 export async function clearAllCloudAccounts(): Promise<void> {
-  const snapshot = await getDocs(collection(db, 'accounts'));
-  const batch = writeBatch(db);
-  snapshot.docs.forEach((d) => {
-    batch.delete(d.ref);
-  });
-  await batch.commit();
+  try {
+    const snapshot = await withCloudTimeout(getDocs(collection(db, 'accounts')), 2000);
+    if (!snapshot || snapshot.empty) return;
+    const batch = writeBatch(db);
+    snapshot.docs.forEach((d) => {
+      batch.delete(d.ref);
+    });
+    await withCloudTimeout(batch.commit(), 2500);
+  } catch (err: any) {
+    console.warn('Aviso ao zerar contas no Firestore:', err?.message);
+  }
 }
 
 // Bank Account Mutations
 export async function saveCloudBankAccount(bank: BankAccount): Promise<void> {
-  const bankId = Number(bank.id);
-  const bankRef = doc(db, 'bank_accounts', String(bankId));
-  const payload = sanitizeBankAccountForFirestore(bank);
-  await setDoc(bankRef, payload);
+  try {
+    const bankId = Number(bank.id);
+    const bankRef = doc(db, 'bank_accounts', String(bankId));
+    const payload = sanitizeBankAccountForFirestore(bank);
+    await withCloudTimeout(setDoc(bankRef, payload), 2000);
+  } catch (err: any) {
+    console.warn('Aviso ao salvar conta bancária no Firestore:', err?.message);
+  }
 }
 
 export async function deleteCloudBankAccount(bankId: number): Promise<void> {
-  const bankRef = doc(db, 'bank_accounts', String(Number(bankId)));
-  await deleteDoc(bankRef);
+  try {
+    const bankRef = doc(db, 'bank_accounts', String(Number(bankId)));
+    await withCloudTimeout(deleteDoc(bankRef), 2000);
+  } catch (err: any) {
+    console.warn('Aviso ao excluir conta bancária no Firestore:', err?.message);
+  }
 }
 
 export async function saveCloudBankAccountsBatch(bankAccounts: BankAccount[]): Promise<void> {
-  const batch = writeBatch(db);
-  for (const b of bankAccounts) {
-    const bankRef = doc(db, 'bank_accounts', String(Number(b.id)));
-    batch.set(bankRef, sanitizeBankAccountForFirestore(b));
+  try {
+    const batch = writeBatch(db);
+    for (const b of bankAccounts) {
+      const bankRef = doc(db, 'bank_accounts', String(Number(b.id)));
+      batch.set(bankRef, sanitizeBankAccountForFirestore(b));
+    }
+    await withCloudTimeout(batch.commit(), 2500);
+  } catch (err: any) {
+    console.warn('Aviso ao salvar lote de bancos no Firestore:', err?.message);
   }
-  await batch.commit();
 }
 
 // Cost Center Mutations
 export async function saveCloudCostCenter(cc: CostCenter): Promise<void> {
-  const ccId = Number(cc.id);
-  const ccRef = doc(db, 'cost_centers', String(ccId));
-  const payload = sanitizeCostCenterForFirestore(cc);
-  await setDoc(ccRef, payload);
+  try {
+    const ccId = Number(cc.id);
+    const ccRef = doc(db, 'cost_centers', String(ccId));
+    const payload = sanitizeCostCenterForFirestore(cc);
+    await withCloudTimeout(setDoc(ccRef, payload), 2000);
+  } catch (err: any) {
+    console.warn('Aviso ao salvar centro de custo no Firestore:', err?.message);
+  }
 }
 
 export async function deleteCloudCostCenter(ccId: number): Promise<void> {
-  const ccRef = doc(db, 'cost_centers', String(Number(ccId)));
-  await deleteDoc(ccRef);
+  try {
+    const ccRef = doc(db, 'cost_centers', String(Number(ccId)));
+    await withCloudTimeout(deleteDoc(ccRef), 2000);
+  } catch (err: any) {
+    console.warn('Aviso ao excluir centro de custo no Firestore:', err?.message);
+  }
 }
 
 export async function saveCloudCostCentersBatch(costCenters: CostCenter[]): Promise<void> {
-  const batch = writeBatch(db);
-  for (const cc of costCenters) {
-    const ccRef = doc(db, 'cost_centers', String(Number(cc.id)));
-    batch.set(ccRef, sanitizeCostCenterForFirestore(cc));
+  try {
+    const batch = writeBatch(db);
+    for (const cc of costCenters) {
+      const ccRef = doc(db, 'cost_centers', String(Number(cc.id)));
+      batch.set(ccRef, sanitizeCostCenterForFirestore(cc));
+    }
+    await withCloudTimeout(batch.commit(), 2500);
+  } catch (err: any) {
+    console.warn('Aviso ao salvar lote de centros de custos no Firestore:', err?.message);
   }
-  await batch.commit();
 }
 
 // Banking Credential Mutations
 export async function saveCloudBankingCredential(cred: TenantBankingCredential): Promise<void> {
-  const credId = String(cred.id);
-  const credRef = doc(db, 'tenant_banking_credentials', credId);
-  const payload = sanitizeBankingCredentialForFirestore(cred);
-  await setDoc(credRef, payload);
+  try {
+    const credId = String(cred.id);
+    const credRef = doc(db, 'tenant_banking_credentials', credId);
+    const payload = sanitizeBankingCredentialForFirestore(cred);
+    await withCloudTimeout(setDoc(credRef, payload), 2000);
+  } catch (err: any) {
+    console.warn('Aviso ao salvar credencial bancária no Firestore:', err?.message);
+  }
 }
 
 export async function deleteCloudBankingCredential(credId: string | number): Promise<void> {
-  const credRef = doc(db, 'tenant_banking_credentials', String(credId));
-  await deleteDoc(credRef);
+  try {
+    const credRef = doc(db, 'tenant_banking_credentials', String(credId));
+    await withCloudTimeout(deleteDoc(credRef), 2000);
+  } catch (err: any) {
+    console.warn('Aviso ao excluir credencial no Firestore:', err?.message);
+  }
 }
 
 export async function saveCloudBankingCredentialsBatch(credentials: TenantBankingCredential[]): Promise<void> {
-  const batch = writeBatch(db);
-  for (const cred of credentials) {
-    const credRef = doc(db, 'tenant_banking_credentials', String(cred.id));
-    batch.set(credRef, sanitizeBankingCredentialForFirestore(cred));
+  try {
+    const batch = writeBatch(db);
+    for (const cred of credentials) {
+      const credRef = doc(db, 'tenant_banking_credentials', String(cred.id));
+      batch.set(credRef, sanitizeBankingCredentialForFirestore(cred));
+    }
+    await withCloudTimeout(batch.commit(), 2500);
+  } catch (err: any) {
+    console.warn('Aviso ao salvar credenciais bancárias no Firestore:', err?.message);
   }
-  await batch.commit();
 }
 
 // Audit Log Mutations
@@ -1242,32 +1328,45 @@ export async function saveCloudAuditLog(
     id: logId,
     data_hora: dataHora,
   };
-  const logRef = doc(db, 'audit_logs', logId);
-  const payload = sanitizeAuditLogForFirestore(fullLog);
-  await setDoc(logRef, payload);
+  try {
+    const logRef = doc(db, 'audit_logs', logId);
+    const payload = sanitizeAuditLogForFirestore(fullLog);
+    await withCloudTimeout(setDoc(logRef, payload), 1500);
+  } catch (err: any) {
+    console.warn('Aviso ao salvar audit log no Firestore:', err?.message);
+  }
   return fullLog;
 }
 
 export async function saveCloudAuditLogsBatch(logs: AuditLog[]): Promise<void> {
-  for (let i = 0; i < logs.length; i += 400) {
-    const batch = writeBatch(db);
-    const chunk = logs.slice(i, i + 400);
-    for (const log of chunk) {
-      const logRef = doc(db, 'audit_logs', String(log.id));
-      const payload = sanitizeAuditLogForFirestore(log);
-      batch.set(logRef, payload);
+  try {
+    for (let i = 0; i < logs.length; i += 400) {
+      const batch = writeBatch(db);
+      const chunk = logs.slice(i, i + 400);
+      for (const log of chunk) {
+        const logRef = doc(db, 'audit_logs', String(log.id));
+        const payload = sanitizeAuditLogForFirestore(log);
+        batch.set(logRef, payload);
+      }
+      await withCloudTimeout(batch.commit(), 2000);
     }
-    await batch.commit();
+  } catch (err: any) {
+    console.warn('Aviso ao salvar lote de logs no Firestore:', err?.message);
   }
 }
 
 export async function clearAllCloudAuditLogs(): Promise<void> {
-  const snapshot = await getDocs(collection(db, 'audit_logs'));
-  const batch = writeBatch(db);
-  snapshot.docs.forEach((d) => {
-    batch.delete(d.ref);
-  });
-  await batch.commit();
+  try {
+    const snapshot = await withCloudTimeout(getDocs(collection(db, 'audit_logs')), 2000);
+    if (!snapshot || snapshot.empty) return;
+    const batch = writeBatch(db);
+    snapshot.docs.forEach((d) => {
+      batch.delete(d.ref);
+    });
+    await withCloudTimeout(batch.commit(), 2500);
+  } catch (err: any) {
+    console.warn('Aviso ao zerar logs no Firestore:', err?.message);
+  }
 }
 
 export async function clearAllCloudDataAndStartFresh(companyName: string = 'Minha Empresa', cnpj?: string): Promise<{ company: Company }> {

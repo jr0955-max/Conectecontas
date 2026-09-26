@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   X, 
   Upload, 
@@ -52,8 +52,19 @@ export const ExtratoImportModal: React.FC<ExtratoImportModalProps> = ({
 }) => {
   const [importMode, setImportMode] = useState<'bank' | 'card' | 'paste'>('bank');
   const [targetCompanyId, setTargetCompanyId] = useState<number>(
-    selectedCompanyId > 0 ? selectedCompanyId : (companies[0]?.id || 1)
+    selectedCompanyId > 0 ? Number(selectedCompanyId) : (Number(companies[0]?.id) || 1)
   );
+
+  // Sincroniza a empresa sempre que o modal abre ou a empresa selecionada muda
+  useEffect(() => {
+    if (isOpen) {
+      if (selectedCompanyId > 0 && companies.some((c) => Number(c.id) === Number(selectedCompanyId))) {
+        setTargetCompanyId(Number(selectedCompanyId));
+      } else if (companies.length > 0 && !companies.some((c) => Number(c.id) === Number(targetCompanyId))) {
+        setTargetCompanyId(Number(companies[0].id));
+      }
+    }
+  }, [isOpen, selectedCompanyId, companies]);
 
   // Card specific options
   const [cardImportOption, setCardImportOption] = useState<'liquido' | 'bruto_taxa'>('liquido');
@@ -745,11 +756,11 @@ NEWFILEUID:NONE
             <select
               value={targetCompanyId}
               onChange={(e) => setTargetCompanyId(Number(e.target.value))}
-              className="text-xs py-1.5 px-3 rounded-lg border border-gray-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-gray-900 dark:text-white font-medium cursor-pointer"
+              className="text-xs py-1.5 px-3 rounded-lg border border-blue-300 dark:border-blue-700 bg-white dark:bg-slate-800 text-gray-900 dark:text-white font-semibold cursor-pointer focus:ring-2 focus:ring-blue-500"
             >
               {companies.map((c) => (
                 <option key={c.id} value={c.id}>
-                  {c.nome} {c.cnpj ? `(${c.cnpj})` : ''}
+                  {c.nome} {Number(c.id) === Number(selectedCompanyId) ? ' (Empresa Atual Selecionada)' : ''} {c.cnpj ? `(${c.cnpj})` : ''}
                 </option>
               ))}
             </select>

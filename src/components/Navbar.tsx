@@ -1,9 +1,7 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState, useRef, useEffect } from 'react';
 import { 
   Building2, 
   ChevronDown, 
-  Sun, 
-  Moon, 
   Menu, 
   Users, 
   LogOut, 
@@ -11,11 +9,18 @@ import {
   Cloud, 
   RefreshCw,
   Crown,
-  CreditCard,
-  HardDrive,
-  Lock
+  Lock,
+  Bell,
+  Clock,
+  AlertCircle,
+  CheckCircle2,
+  Sliders,
+  X,
+  ChevronRight,
+  Calendar
 } from 'lucide-react';
-import { Company, User, Tenant, getUserEffectivePermissions } from '../types';
+import { Company, User, Tenant, getUserEffectivePermissions, FinancialAccount, ReminderItem, ReminderSettings } from '../types';
+import { formatReminderDueDate } from '../utils/reminderService';
 import { ArrowLeftRight } from 'lucide-react';
 
 interface NavbarProps {
@@ -31,6 +36,7 @@ interface NavbarProps {
   onOpenSubscriptionModal?: () => void;
   onOpenBackupModal?: () => void;
   onOpenSecurityModal?: () => void;
+  onOpenResetModal?: () => void;
   timeoutMinutes?: number;
   pendingApprovalsCount?: number;
   onOpenCsvModal?: (initialTab?: 'export' | 'import') => void;
@@ -46,6 +52,10 @@ interface NavbarProps {
   currentViewTitle: string;
   onForceSync?: () => void;
   isSyncing?: boolean;
+  reminders?: ReminderItem[];
+  reminderSettings?: ReminderSettings;
+  onOpenReminderSettings?: () => void;
+  onQuickPayAccount?: (account: FinancialAccount) => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -58,6 +68,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenSubscriptionModal,
   onOpenBackupModal,
   onOpenSecurityModal,
+  onOpenResetModal,
   timeoutMinutes = 15,
   pendingApprovalsCount = 0,
   currentUser,
@@ -70,6 +81,10 @@ export const Navbar: React.FC<NavbarProps> = ({
   currentViewTitle,
   onForceSync,
   isSyncing,
+  reminders = [],
+  reminderSettings,
+  onOpenReminderSettings,
+  onQuickPayAccount,
 }) => {
   const isMaster = Boolean(
     currentUser?.is_master || 
@@ -84,6 +99,37 @@ export const Navbar: React.FC<NavbarProps> = ({
 
   const isConsolidated = selectedCompanyId === -1;
   const currentCompany = companies.find((c) => c.id === selectedCompanyId);
+
+  const [isRemindersOpen, setIsRemindersOpen] = useState(false);
+  const [reminderFilter, setReminderFilter] = useState<'all' | 'atrasado' | 'hoje' | 'proximo'>('all');
+  const remindersDropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (
+        remindersDropdownRef.current &&
+        !remindersDropdownRef.current.contains(event.target as Node)
+      ) {
+        setIsRemindersOpen(false);
+      }
+    };
+    if (isRemindersOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isRemindersOpen]);
+
+  const overdueCount = reminders.filter((r) => r.urgencia === 'atrasado').length;
+  const todayCount = reminders.filter((r) => r.urgencia === 'hoje').length;
+  const upcomingCount = reminders.filter((r) => r.urgencia === 'proximo').length;
+  const totalReminderAmount = reminders.reduce((sum, r) => sum + Number(r.account.valor || 0), 0);
+
+  const displayedReminders = useMemo(() => {
+    if (reminderFilter === 'all') return reminders;
+    return reminders.filter((r) => r.urgencia === reminderFilter);
+  }, [reminders, reminderFilter]);
 
   return (
     <header className="h-20 bg-white dark:bg-slate-900 border-b border-gray-200 dark:border-slate-800 flex items-center justify-between px-4 sm:px-8 shrink-0 transition-colors">
@@ -205,18 +251,6 @@ export const Navbar: React.FC<NavbarProps> = ({
           </span>
         )}
 
-        {/* Gerenciar Empresas Button (Restrito por permissão) */}
-        {(permissions.pode_gerenciar_empresas || isMaster) && (
-          <button
-            id="btn-open-companies-header"
-            onClick={onOpenCompanyModal}
-            title="Cadastrar / Gerenciar Empresas"
-            className="p-2 bg-gray-100 dark:bg-slate-800 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-200 dark:hover:bg-slate-700 transition-colors cursor-pointer shrink-0"
-          >
-            <Building2 className="w-4 h-4" />
-          </button>
-        )}
-
         {/* Usuários & Permissões Button (Restrito por permissão) */}
         {(permissions.pode_gerenciar_usuarios || isMaster) && (
           <button
@@ -229,55 +263,235 @@ export const Navbar: React.FC<NavbarProps> = ({
           </button>
         )}
 
-        {/* Sincronizar Nuvem & Celular */}
-        {onForceSync && (
+        {/* Central de Notificações / Lembretes Financeiros */}
+        <div className="relative" ref={remindersDropdownRef}>
           <button
-            id="btn-navbar-sync-mobile"
-            onClick={onForceSync}
-            disabled={isSyncing}
-            title="Sincronizar com Celular e Servidor Nuvem"
-            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/60 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 transition-colors cursor-pointer shrink-0 disabled:opacity-50"
+            id="btn-header-reminders-bell"
+            onClick={() => setIsRemindersOpen((prev) => !prev)}
+            title={`Lembretes Financeiros (${reminders.length} contas a pagar no radar)`}
+            className={`p-2 rounded-lg transition-all cursor-pointer relative shrink-0 ${
+              isRemindersOpen
+                ? 'bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 ring-2 ring-amber-500/30'
+                : reminders.length > 0
+                ? 'bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 hover:bg-amber-100 dark:hover:bg-amber-900/60'
+                : 'bg-gray-100 dark:bg-slate-800 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-slate-700'
+            }`}
           >
-            <RefreshCw className={`w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 ${isSyncing ? 'animate-spin' : ''}`} />
-            <span className="hidden sm:inline">Sincronizar Celular</span>
+            <Bell className="w-4 h-4" />
+            
+            {reminders.length > 0 && (
+              <span className={`absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-extrabold flex items-center justify-center text-white shadow-xs ${
+                overdueCount > 0
+                  ? 'bg-rose-600 animate-pulse'
+                  : todayCount > 0
+                  ? 'bg-amber-600'
+                  : 'bg-blue-600'
+              }`}>
+                {reminders.length > 99 ? '99+' : reminders.length}
+              </span>
+            )}
           </button>
-        )}
 
-        {/* Backup Google Drive Button (Restrito por permissão ou Master) */}
-        {onOpenBackupModal && (permissions.pode_resetar_banco || isMaster) && (
-          <button
-            id="btn-navbar-backup-drive"
-            onClick={onOpenBackupModal}
-            title="Backup e Sincronização no Google Drive"
-            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-bold bg-sky-50 dark:bg-sky-950/60 text-sky-700 dark:text-sky-300 border border-sky-200 dark:border-sky-800/60 hover:bg-sky-100 dark:hover:bg-sky-900/60 transition-colors cursor-pointer shrink-0"
-          >
-            <HardDrive className="w-3.5 h-3.5 text-sky-500" />
-            <span className="hidden md:inline">Backup Google Drive</span>
-          </button>
-        )}
+          {/* Dropdown Popover de Lembretes */}
+          {isRemindersOpen && (
+            <div className="absolute right-0 top-full mt-2 w-84 sm:w-96 bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-800 rounded-2xl shadow-2xl z-50 overflow-hidden flex flex-col max-h-[85vh] animate-in fade-in zoom-in-95 duration-150">
+              
+              {/* Header do Dropdown */}
+              <div className="p-4 border-b border-gray-100 dark:border-slate-800/80 bg-gray-50/80 dark:bg-slate-850 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-lg bg-amber-500/15 text-amber-600 dark:text-amber-400 flex items-center justify-center">
+                    <Bell className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-xs font-bold text-gray-900 dark:text-white flex items-center gap-1.5">
+                      <span>Lembretes Financeiros</span>
+                      <span className="text-[10px] font-mono px-1.5 py-0.2 bg-amber-100 dark:bg-amber-950/80 text-amber-700 dark:text-amber-300 rounded-full font-bold">
+                        {reminders.length}
+                      </span>
+                    </h3>
+                    <p className="text-[10px] text-gray-500 dark:text-slate-400">
+                      Antecedência: <strong>{reminderSettings?.dias_antecedencia || 3} dias</strong>
+                    </p>
+                  </div>
+                </div>
 
-        {/* Minha Assinatura / Planos Mercado Pago */}
-        {onOpenSubscriptionModal && (
-          <button
-            id="btn-navbar-subscription"
-            onClick={onOpenSubscriptionModal}
-            title="Minha Assinatura & Planos Mercado Pago"
-            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-bold bg-sky-50 dark:bg-sky-950/60 text-sky-700 dark:text-sky-300 border border-sky-200 dark:border-sky-800/60 hover:bg-sky-100 dark:hover:bg-sky-900/60 transition-colors cursor-pointer shrink-0"
-          >
-            <CreditCard className="w-3.5 h-3.5 text-sky-500" />
-            <span className="hidden sm:inline">Assinatura</span>
-          </button>
-        )}
+                <div className="flex items-center gap-1">
+                  {onOpenReminderSettings && (
+                    <button
+                      onClick={() => {
+                        setIsRemindersOpen(false);
+                        onOpenReminderSettings();
+                      }}
+                      className="p-1.5 text-gray-500 hover:text-blue-600 dark:text-slate-400 dark:hover:text-blue-400 hover:bg-gray-200 dark:hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
+                      title="Configurar prazo de antecedência"
+                    >
+                      <Sliders className="w-4 h-4" />
+                    </button>
+                  )}
+                  <button
+                    onClick={() => setIsRemindersOpen(false)}
+                    className="p-1.5 text-gray-400 hover:text-gray-600 dark:hover:text-slate-300 rounded-lg hover:bg-gray-200 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                    title="Fechar"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
 
-        {/* Dark / Light Mode Toggle Button */}
-        <button
-          id="btn-toggle-theme"
-          onClick={onToggleTheme}
-          title={darkMode ? 'Mudar para tema claro' : 'Mudar para tema escuro'}
-          className="p-2 bg-gray-100 dark:bg-slate-800 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-200 dark:hover:bg-slate-700 transition-colors cursor-pointer shrink-0"
-        >
-          {darkMode ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4 text-gray-600" />}
-        </button>
+              {/* Totalizador Financeiro */}
+              {reminders.length > 0 && (
+                <div className="px-4 py-2 bg-amber-50/50 dark:bg-amber-950/20 border-b border-gray-100 dark:border-slate-800/80 flex items-center justify-between text-xs">
+                  <span className="text-[11px] text-gray-600 dark:text-slate-400">Total a Pagar no Radar:</span>
+                  <span className="font-bold text-amber-700 dark:text-amber-300">
+                    {totalReminderAmount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                  </span>
+                </div>
+              )}
+
+              {/* Filtros rápidos */}
+              {reminders.length > 0 && (
+                <div className="p-2 border-b border-gray-100 dark:border-slate-800/80 flex items-center gap-1 overflow-x-auto text-[11px]">
+                  <button
+                    onClick={() => setReminderFilter('all')}
+                    className={`px-2 py-1 rounded-lg font-semibold transition-colors cursor-pointer shrink-0 ${
+                      reminderFilter === 'all'
+                        ? 'bg-blue-600 text-white'
+                        : 'text-gray-600 dark:text-slate-400 hover:bg-gray-100 dark:hover:bg-slate-800'
+                    }`}
+                  >
+                    Todas ({reminders.length})
+                  </button>
+
+                  {overdueCount > 0 && (
+                    <button
+                      onClick={() => setReminderFilter('atrasado')}
+                      className={`px-2 py-1 rounded-lg font-semibold transition-colors cursor-pointer shrink-0 ${
+                        reminderFilter === 'atrasado'
+                          ? 'bg-rose-600 text-white'
+                          : 'text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40'
+                      }`}
+                    >
+                      Atrasadas ({overdueCount})
+                    </button>
+                  )}
+
+                  {todayCount > 0 && (
+                    <button
+                      onClick={() => setReminderFilter('hoje')}
+                      className={`px-2 py-1 rounded-lg font-semibold transition-colors cursor-pointer shrink-0 ${
+                        reminderFilter === 'hoje'
+                          ? 'bg-amber-600 text-white'
+                          : 'text-amber-700 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/40'
+                      }`}
+                    >
+                      Hoje ({todayCount})
+                    </button>
+                  )}
+
+                  {upcomingCount > 0 && (
+                    <button
+                      onClick={() => setReminderFilter('proximo')}
+                      className={`px-2 py-1 rounded-lg font-semibold transition-colors cursor-pointer shrink-0 ${
+                        reminderFilter === 'proximo'
+                          ? 'bg-indigo-600 text-white'
+                          : 'text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/40'
+                      }`}
+                    >
+                      A Vencer ({upcomingCount})
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* Lista com scroll */}
+              <div className="p-3 space-y-2 overflow-y-auto flex-1 max-h-72">
+                {displayedReminders.length === 0 ? (
+                  <div className="py-8 text-center space-y-2">
+                    <CheckCircle2 className="w-8 h-8 text-emerald-500 mx-auto opacity-80" />
+                    <p className="text-xs font-bold text-gray-700 dark:text-slate-300">
+                      Nenhum lembrete pendente
+                    </p>
+                    <p className="text-[11px] text-gray-500 dark:text-slate-400 max-w-[240px] mx-auto">
+                      Não há contas a pagar no prazo de {reminderSettings?.dias_antecedencia || 3} dias. Tudo em dia!
+                    </p>
+                  </div>
+                ) : (
+                  displayedReminders.map((rem) => {
+                    const statusInfo = formatReminderDueDate(
+                      rem.diasAteVencimento,
+                      rem.account.data_vencimento
+                    );
+                    return (
+                      <div
+                        key={rem.account.id}
+                        className="p-2.5 rounded-xl border border-gray-100 dark:border-slate-800 bg-gray-50/60 dark:bg-slate-800/40 hover:bg-gray-100 dark:hover:bg-slate-800 transition-colors flex flex-col gap-1.5"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0 flex-1">
+                            <span className={`inline-block text-[10px] font-bold px-2 py-0.5 rounded-md border ${statusInfo.badgeClass} mb-1`}>
+                              {statusInfo.label}
+                            </span>
+                            <p className="text-xs font-bold text-gray-900 dark:text-slate-100 truncate">
+                              {rem.account.descricao}
+                            </p>
+                            <div className="flex items-center gap-1.5 text-[10px] text-gray-500 dark:text-slate-400 pt-0.5">
+                              {rem.account.categoria && <span>{rem.account.categoria}</span>}
+                              {rem.empresaNome && isConsolidated && (
+                                <>
+                                  <span>•</span>
+                                  <span className="truncate max-w-[120px] font-medium">{rem.empresaNome}</span>
+                                </>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="text-right shrink-0">
+                            <span className="text-xs font-extrabold text-rose-600 dark:text-rose-400 block">
+                              {Number(rem.account.valor).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                            </span>
+
+                            {onQuickPayAccount && (permissions.pode_quitar_contas || isMaster) && (
+                              <button
+                                onClick={() => {
+                                  onQuickPayAccount(rem.account);
+                                }}
+                                className="mt-1 px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-600 hover:bg-emerald-500 text-white transition-colors cursor-pointer shadow-2xs"
+                                title="Marcar como Pago agora"
+                              >
+                                Dar Baixa
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+
+              {/* Footer do Dropdown */}
+              <div className="p-3 border-t border-gray-100 dark:border-slate-800/80 bg-gray-50/80 dark:bg-slate-850 flex items-center justify-between">
+                <span className="text-[10px] text-gray-500 dark:text-slate-400">
+                  {reminders.length} no radar
+                </span>
+
+                {onOpenReminderSettings && (
+                  <button
+                    onClick={() => {
+                      setIsRemindersOpen(false);
+                      onOpenReminderSettings();
+                    }}
+                    className="text-xs font-bold text-blue-600 hover:text-blue-500 dark:text-blue-400 flex items-center gap-1 cursor-pointer"
+                  >
+                    <span>Configurar Antecedência</span>
+                    <ChevronRight className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+
+            </div>
+          )}
+        </div>
 
         {/* Logged-in User Profile Badge & Logout */}
         <div className="pl-2 border-l border-gray-200 dark:border-slate-800 flex items-center gap-2">

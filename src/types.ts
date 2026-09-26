@@ -117,7 +117,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<UserRole, UserPermissions> = {
     pode_ver_auditoria: true,
     pode_gerenciar_usuarios: false,
     pode_ver_desenvolvedor: false,
-    pode_resetar_banco: false,
+    pode_resetar_banco: true,
   },
   operador: {
     pode_adicionar_contas: true,
@@ -409,6 +409,8 @@ export interface OFXTransaction {
   refnum?: string;
   banco_nome?: string;
   conta_numero?: string;
+  isSweep?: boolean; // Aplicação ou resgate automático (ex: BB Rende Fácil, Invest Fácil)
+  sweepType?: 'aplicacao' | 'resgate';
 }
 
 export interface OFXStatement {
@@ -600,6 +602,35 @@ export interface CompanySummaryMetric {
   recebido: number;
   pago: number;
   qtdContas: number;
+}
+
+export interface ReminderSettings {
+  enabled: boolean;
+  dias_antecedencia: number; // Prazo de antecedência em dias (ex: 1, 2, 3, 5, 7, 15, 30)
+  avisar_vencendo_hoje: boolean; // Notificar contas com vencimento hoje
+  avisar_em_atraso: boolean; // Notificar contas já vencidas ainda pendentes
+  avisar_com_antecedencia: boolean; // Notificar contas dentro do prazo configurado
+  som_alerta: boolean; // Tocar aviso sonoro suave ao identificar pendências
+  notificacao_navegador: boolean; // Alerta de desktop/navegador
+  banner_visivel: boolean; // Exibir barra de alerta rápido no topo do painel
+}
+
+export const DEFAULT_REMINDER_SETTINGS: ReminderSettings = {
+  enabled: true,
+  dias_antecedencia: 3,
+  avisar_vencendo_hoje: true,
+  avisar_em_atraso: true,
+  avisar_com_antecedencia: true,
+  som_alerta: true,
+  notificacao_navegador: false,
+  banner_visivel: true,
+};
+
+export interface ReminderItem {
+  account: FinancialAccount;
+  diasAteVencimento: number; // < 0: atrasado; 0: vence hoje; > 0: vence em N dias
+  urgencia: 'atrasado' | 'hoje' | 'proximo';
+  empresaNome?: string;
 }
 
 

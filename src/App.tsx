@@ -16,8 +16,21 @@ import {
   Tenant,
   isTenantActive,
   calculateExtendedExpirationDate,
-  BillingInvoice
+  BillingInvoice,
+  ReminderSettings,
+  ReminderItem,
+  DEFAULT_REMINDER_SETTINGS
 } from './types';
+import { 
+  loadReminderSettings, 
+  saveReminderSettings, 
+  calculateReminders, 
+  playReminderChime, 
+  sendBrowserNotification 
+} from './utils/reminderService';
+import { ReminderSettingsModal } from './components/ReminderSettingsModal';
+import { ReminderAlertBanner } from './components/ReminderAlertBanner';
+import { UpcomingPayablesChart } from './components/UpcomingPayablesChart';
 import { 
   INITIAL_COMPANIES, 
   INITIAL_ACCOUNTS, 
@@ -118,7 +131,8 @@ import {
   deleteServerUser, 
   deleteServerAccount,
   saveServerAccount,
-  saveServerAccountsBatch
+  saveServerAccountsBatch,
+  clearServerAccounts
 } from './services/systemStoreService';
 
 export default function App() {
@@ -254,10 +268,10 @@ export default function App() {
 
   const [accounts, setAccounts] = useState<FinancialAccount[]>(() => {
     const saved = localStorage.getItem('fin_accounts');
-    if (saved) {
+    if (saved !== null) {
       try { 
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) return parsed;
       } catch (e) {}
     }
     return INITIAL_ACCOUNTS;
@@ -314,6 +328,12 @@ export default function App() {
     return localStorage.getItem('fin_has_selected_company') === 'true';
   });
 
+  // 6. Lembretes Financeiros & Configuração de Prazo de Vencimento
+  const [reminderSettings, setReminderSettings] = useState<ReminderSettings>(() => {
+    return loadReminderSettings(currentUser?.id);
+  });
+  const [isReminderModalOpen, setIsReminderModalOpen] = useState<boolean>(false);
+
   // SaaS Multi-Tenant License Block State (Triggered when server responds with 403 Forbidden on financial endpoints)
   const [isServerSubscriptionBlocked, setIsServerSubscriptionBlocked] = useState<boolean>(false);
 
@@ -350,9 +370,7 @@ export default function App() {
   }, [companies]);
 
   useEffect(() => {
-    if (accounts.length > 0) {
-      localStorage.setItem('fin_accounts', JSON.stringify(accounts));
-    }
+    localStorage.setItem('fin_accounts', JSON.stringify(accounts));
   }, [accounts]);
 
   useEffect(() => {
@@ -531,62 +549,89 @@ export default function App() {
 
           // 2. Merge inteligente de Contas (PROTEÇÃO CRÍTICA ANTI-PERDA DE DADOS)
           if (Array.isArray(sData.accounts)) {
-            const now = Date.now();
-            const safeAccounts = sData.accounts.map((acc: FinancialAccount) => {
-              const deletedAt = recentlyDeletedAccountsRef.current.get(Number(acc.id));
-              if (deletedAt && (now - deletedAt) < 15000) {
-                return { ...acc, excluido: true };
-              }
-              return acc;
-            });
+            const serverClearedAt = Number((sData as any).clearedAccountsTimestamp || 0);
+            const isExplicitEmpty = sData.accounts.length === 0 && (Boolean(sData.hasCustomData) || serverClearedAt > 0);
 
-            // Carrega contas locais existentes no navegador antes de qualquer substituição
-            let localAccountsList: FinancialAccount[] = [];
-            try {
-              const rawLocal = localStorage.getItem('fin_accounts');
-              if (rawLocal) localAccountsList = JSON.parse(rawLocal);
-            } catch (e) {}
+            if (isExplicitEmpty) {
+              console.log('🧹 [App.tsx] O servidor indicou que os lançamentos estão zerados. Limpando cache local.');
+              setAccounts([]);
+              localStorage.setItem('fin_accounts', JSON.stringify([]));
+              localStorage.removeItem('fin_accounts_safety_backup');
+            } else {
+              const now = Date.now();
+              const safeAccounts = sData.accounts.map((acc: FinancialAccount) => {
+                const deletedAt = recentlyDeletedAccountsRef.current.get(Number(acc.id));
+                if (deletedAt && (now - deletedAt) < 15000) {
+                  return { ...acc, excluido: true };
+                }
+                return acc;
+              });
 
-            // Guarda snapshot de segurança do cache local caso ainda não tenha sido sobrescrito
-            if (localAccountsList.length > safeAccounts.length) {
+              // Carrega contas locais existentes no navegador antes de qualquer substituição
+              let localAccountsList: FinancialAccount[] = [];
               try {
-                localStorage.setItem('fin_accounts_safety_backup', JSON.stringify({
-                  timestamp: Date.now(),
-                  count: localAccountsList.length,
-                  accounts: localAccountsList,
-                }));
+                const rawLocal = localStorage.getItem('fin_accounts');
+                if (rawLocal) localAccountsList = JSON.parse(rawLocal);
               } catch (e) {}
-            }
 
-            // Merge inteligente: nunca perde contas que existiam localmente
-            const accountMap = new Map<number, FinancialAccount>();
-            localAccountsList.forEach((acc) => {
-              if (acc && acc.id) accountMap.set(Number(acc.id), acc);
-            });
-            safeAccounts.forEach((acc) => {
-              if (acc && acc.id) accountMap.set(Number(acc.id), acc);
-            });
+              // Se o servidor foi zerado recentemente, descarta contas locais criadas antes da limpeza
+              if (serverClearedAt > 0) {
+                localAccountsList = localAccountsList.filter((a) => {
+                  const createdAt = a.criado_em ? new Date(a.criado_em).getTime() : 0;
+                  return createdAt > serverClearedAt;
+                });
+              }
 
-            const finalAccounts = Array.from(accountMap.values());
-            setAccounts(finalAccounts);
-            localStorage.setItem('fin_accounts', JSON.stringify(finalAccounts));
+              // Guarda snapshot de segurança do cache local caso ainda não tenha sido sobrescrito
+              if (localAccountsList.length > safeAccounts.length && serverClearedAt === 0) {
+                try {
+                  localStorage.setItem('fin_accounts_safety_backup', JSON.stringify({
+                    timestamp: Date.now(),
+                    count: localAccountsList.length,
+                    accounts: localAccountsList,
+                  }));
+                } catch (e) {}
+              }
 
-            // Se o navegador possuía contas que o servidor não tinha (ex: após reinício de contêiner ou novo servidor),
-            // envia imediatamente essas contas para o servidor central para que fique 100% atualizado!
-            if (finalAccounts.length > safeAccounts.length) {
-              console.log(`🛡️ [App.tsx] Sincronização de Resgate: Restaurando ${finalAccounts.length - safeAccounts.length} contas do navegador para o servidor central!`);
-              saveServerSystemStore({
-                hasCustomData: true,
-                companies: sData.companies || [],
-                accounts: finalAccounts,
-                users: sData.users || [],
-                userCompanies: sData.userCompanies || [],
-                bankAccounts: sData.bankAccounts || [],
-                costCenters: sData.costCenters || [],
-                tenants: sData.tenants || [],
-                auditLogs: sData.auditLogs || [],
-                source: 'client_local_cache_recovery',
-              }).catch((e) => console.warn('Aviso ao sincronizar contas recuperadas:', e));
+              // Merge inteligente: nunca perde contas que existiam localmente
+              const accountMap = new Map<number, FinancialAccount>();
+              localAccountsList.forEach((acc) => {
+                if (acc && acc.id) accountMap.set(Number(acc.id), acc);
+              });
+              safeAccounts.forEach((acc) => {
+                if (acc && acc.id) accountMap.set(Number(acc.id), acc);
+              });
+
+              const finalAccounts = Array.from(accountMap.values()).map((acc) => {
+                if (Number(acc.valor) === 0 || /saldo\s+(do\s+dia|anterior)/i.test(acc.descricao || '')) {
+                  return { ...acc, excluido: true };
+                }
+                // Garante que o lote do segundo extrato (Lourenço Junior) fique na empresa correta (1788220409638)
+                if (Number(acc.id) >= 1790300442952 && Number(acc.id) <= 1790300442980) {
+                  return { ...acc, empresa_id: 1788220409638 };
+                }
+                return acc;
+              });
+              setAccounts(finalAccounts);
+              localStorage.setItem('fin_accounts', JSON.stringify(finalAccounts));
+
+              // Se o navegador possuía contas que o servidor não tinha (ex: após reinício de contêiner ou novo servidor),
+              // envia imediatamente essas contas para o servidor central para que fique 100% atualizado!
+              if (finalAccounts.length > safeAccounts.length && serverClearedAt === 0) {
+                console.log(`🛡️ [App.tsx] Sincronização de Resgate: Restaurando ${finalAccounts.length - safeAccounts.length} contas do navegador para o servidor central!`);
+                saveServerSystemStore({
+                  hasCustomData: true,
+                  companies: sData.companies || [],
+                  accounts: finalAccounts,
+                  users: sData.users || [],
+                  userCompanies: sData.userCompanies || [],
+                  bankAccounts: sData.bankAccounts || [],
+                  costCenters: sData.costCenters || [],
+                  tenants: sData.tenants || [],
+                  auditLogs: sData.auditLogs || [],
+                  source: 'client_local_cache_recovery',
+                }).catch((e) => console.warn('Aviso ao sincronizar contas recuperadas:', e));
+              }
             }
           }
           if (Array.isArray(sData.users) && sData.users.length > 0) {
@@ -677,9 +722,14 @@ export default function App() {
           setCompanies(data.companies);
           localStorage.setItem('fin_companies', JSON.stringify(data.companies));
         }
-        if (Array.isArray(data.accounts) && data.accounts.length > 0) {
-          setAccounts(data.accounts);
-          localStorage.setItem('fin_accounts', JSON.stringify(data.accounts));
+        if (Array.isArray(data.accounts)) {
+          if (data.accounts.length === 0 && Boolean((data as any).hasCustomData)) {
+            setAccounts([]);
+            localStorage.setItem('fin_accounts', JSON.stringify([]));
+          } else if (data.accounts.length > 0) {
+            setAccounts(data.accounts);
+            localStorage.setItem('fin_accounts', JSON.stringify(data.accounts));
+          }
         }
         setCloudSynced(true);
       } catch (e) {
@@ -734,8 +784,14 @@ export default function App() {
     // 4. Subscribe to cloud accounts (Always sync instantly on delete/add/edit)
     const unsubAccounts = subscribeToAccounts((cloudAccs) => {
       if (Date.now() - lastRestoredTimestampRef.current < 30000) return;
-      if (Array.isArray(cloudAccs) && cloudAccs.length > 0) {
-        setAccounts(cloudAccs);
+      if (Array.isArray(cloudAccs)) {
+        const fixedCloudAccs = cloudAccs.map((a) => {
+          if (a && Number(a.id) >= 1790300442952 && Number(a.id) <= 1790300442980 && Number(a.empresa_id) === 1788215217113) {
+            return { ...a, empresa_id: 1788220409638 };
+          }
+          return a;
+        });
+        setAccounts(fixedCloudAccs);
         setCloudSynced(true);
       }
     });
@@ -1148,6 +1204,36 @@ export default function App() {
       permittedCompanyIds.includes(Number(a.empresa_id))
     ));
   }, [isConsolidated, accounts, permittedCompanyIds, selectedCompanyId, currentUser]);
+
+  // Lembretes de Vencimento de Contas a Pagar (com base no prazo de antecedência configurado)
+  const financialReminders = useMemo(() => {
+    return calculateReminders(tenantScopedAccounts, reminderSettings, permittedCompanies);
+  }, [tenantScopedAccounts, reminderSettings, permittedCompanies]);
+
+  // Alerta sonoro suave e notificação de boas-vindas ao identificar pendências no radar
+  const hasTriggeredInitialReminderSoundRef = useRef<boolean>(false);
+  useEffect(() => {
+    if (
+      !hasTriggeredInitialReminderSoundRef.current &&
+      currentUser &&
+      reminderSettings.enabled &&
+      financialReminders.length > 0
+    ) {
+      hasTriggeredInitialReminderSoundRef.current = true;
+      if (reminderSettings.som_alerta) {
+        const timer = setTimeout(() => {
+          playReminderChime();
+        }, 1000);
+        return () => clearTimeout(timer);
+      }
+      if (reminderSettings.notificacao_navegador) {
+        sendBrowserNotification(
+          `Lembrete Financeiro: ${financialReminders.length} conta(s) a pagar`,
+          `Você possui contas a pagar no prazo de ${reminderSettings.dias_antecedencia} dias que requerem atenção.`
+        );
+      }
+    }
+  }, [financialReminders.length, reminderSettings, currentUser]);
 
   // Count of pending approval requests for Master badge
   const pendingApprovalsCount = useMemo(() => {
@@ -2737,7 +2823,24 @@ export default function App() {
 
   const handleClearAllAccounts = async () => {
     setAccounts([]);
+    localStorage.setItem('fin_accounts', JSON.stringify([]));
+    localStorage.removeItem('fin_accounts_safety_backup');
+    await clearServerAccounts();
     await clearAllCloudAccounts();
+    await saveServerSystemStore({
+      hasCustomData: true,
+      companies,
+      accounts: [],
+      users,
+      userCompanies,
+      bankAccounts,
+      costCenters,
+      tenants,
+      auditLogs,
+      clearAccounts: true,
+      clearedAccountsTimestamp: Date.now(),
+      source: 'clear_accounts',
+    });
   };
 
   const handleResetAllAndStartFresh = async (companyName: string, cnpj?: string) => {
@@ -2825,9 +2928,13 @@ export default function App() {
       conciliado_por: currentUser?.nome || 'Admin',
       banco_id: bankId !== undefined ? bankId : acc.banco_id,
     };
-    setAccounts(prev => prev.map(a => Number(a.id) === Number(accountId) ? updated : a));
-    await saveCloudAccount(updated);
-    await saveCloudAuditLog({
+    const nextAccounts = accounts.map(a => Number(a.id) === Number(accountId) ? updated : a);
+    setAccounts(nextAccounts);
+    localStorage.setItem('fin_accounts', JSON.stringify(nextAccounts));
+
+    saveServerAccount(updated).catch((e) => console.warn('Erro ao salvar conta conciliada no servidor:', e));
+    saveCloudAccount(updated).catch((err) => console.warn('Aviso ao conciliar conta na nuvem:', err));
+    saveCloudAuditLog({
       acao: 'CONCILIACAO_BANCARIA',
       entidade: 'conta',
       entidade_id: accountId,
@@ -2837,7 +2944,7 @@ export default function App() {
       empresa_id: acc.empresa_id,
       descricao: `Conciliou e baixou a conta #${accountId} "${acc.descricao}" via extrato bancário`,
       detalhes: { fitid, bankId },
-    });
+    }).catch((e) => console.warn('Audit log error:', e));
   };
 
   // OFX Create & Reconcile
@@ -2855,9 +2962,13 @@ export default function App() {
       criado_em: new Date().toISOString(),
       excluido: false,
     };
-    setAccounts(prev => [created, ...prev]);
-    await saveCloudAccount(created);
-    await saveCloudAuditLog({
+    const nextAccounts = [created, ...accounts];
+    setAccounts(nextAccounts);
+    localStorage.setItem('fin_accounts', JSON.stringify(nextAccounts));
+
+    saveServerAccount(created).catch((e) => console.warn('Erro ao salvar nova conta no servidor central:', e));
+    saveCloudAccount(created).catch((err) => console.warn('Aviso ao salvar nova conta na nuvem:', err));
+    saveCloudAuditLog({
       acao: 'CRIACAO',
       entidade: 'conta',
       entidade_id: newId,
@@ -2867,7 +2978,7 @@ export default function App() {
       empresa_id: created.empresa_id,
       descricao: `Criou e conciliou novo lançamento a partir do extrato: "${created.descricao}" (R$ ${created.valor.toFixed(2)})`,
       detalhes: { account: created },
-    });
+    }).catch((e) => console.warn('Audit log error:', e));
   };
 
   // OFX Batch Reconcile
@@ -2916,15 +3027,39 @@ export default function App() {
       ...Array.from(accountsMap.values())
     ];
 
+    // Atualização local imediata
     setAccounts(finalAccountsList);
+    localStorage.setItem('fin_accounts', JSON.stringify(finalAccountsList));
+
+    // Salva diretamente no servidor central (Node)
+    if (createdFromOfx.length > 0) {
+      saveServerAccountsBatch(createdFromOfx).catch((e) => console.warn('Erro ao salvar lote de novas contas no servidor:', e));
+    }
     if (updatedAccounts.length > 0) {
-      await saveCloudAccountsBatch(updatedAccounts);
+      saveServerAccountsBatch(updatedAccounts).catch((e) => console.warn('Erro ao salvar lote de contas atualizadas no servidor:', e));
+    }
+    saveServerSystemStore({
+      hasCustomData: true,
+      companies,
+      accounts: finalAccountsList,
+      users,
+      userCompanies,
+      bankAccounts,
+      costCenters,
+      tenants,
+      auditLogs,
+      source: 'ofx_batch_reconcile',
+    }).catch((e) => console.warn('Aviso ao sincronizar lote OFX no servidor:', e));
+
+    // Sincronização em nuvem sem bloquear UI
+    if (updatedAccounts.length > 0) {
+      saveCloudAccountsBatch(updatedAccounts).catch((err) => console.warn('Aviso ao atualizar lote na nuvem:', err));
     }
     if (createdFromOfx.length > 0) {
-      await saveCloudAccountsBatch(createdFromOfx);
+      saveCloudAccountsBatch(createdFromOfx).catch((err) => console.warn('Aviso ao criar lote na nuvem:', err));
     }
 
-    await saveCloudAuditLog({
+    saveCloudAuditLog({
       acao: 'CONCILIACAO_BANCARIA',
       entidade: 'conta',
       entidade_id: 0,
@@ -2934,7 +3069,7 @@ export default function App() {
       empresa_id: Number(selectedCompanyId === -1 ? (permittedCompanies[0]?.id || 1) : selectedCompanyId),
       descricao: `Processou conciliação em lote: ${matches.length} conciliações e ${newAccounts.length} novos lançamentos`,
       detalhes: { matchesCount: matches.length, newCount: newAccounts.length },
-    });
+    }).catch((e) => console.warn('Audit log error:', e));
   };
 
   // Bank Accounts Handlers
@@ -3440,6 +3575,12 @@ export default function App() {
         auditLogsCount={scopedAuditLogs.length}
         isOpenMobile={isMobileMenuOpen}
         onCloseMobile={() => setIsMobileMenuOpen(false)}
+        onForceSync={handleForceCloudSync}
+        isSyncing={isSyncing}
+        darkMode={darkMode}
+        onToggleTheme={() => setDarkMode(!darkMode)}
+        onOpenReminderSettings={() => setIsReminderModalOpen(true)}
+        remindersCount={financialReminders.length}
       />
 
       {/* 2. Main Content View Area */}
@@ -3466,6 +3607,7 @@ export default function App() {
           pendingApprovalsCount={pendingApprovalsCount}
           onOpenCsvModal={handleOpenCsv}
           onOpenExtratoModal={() => setIsExtratoModalOpen(true)}
+          onOpenResetModal={() => setIsResetModalOpen(true)}
           onDownloadAppPy={handleDownloadAppPy}
           currentUser={currentUser}
           tenant={currentTenant || undefined}
@@ -3477,6 +3619,10 @@ export default function App() {
           currentViewTitle={getTitleByView()}
           onForceSync={handleForceCloudSync}
           isSyncing={isSyncing}
+          reminders={financialReminders}
+          reminderSettings={reminderSettings}
+          onOpenReminderSettings={() => setIsReminderModalOpen(true)}
+          onQuickPayAccount={(acc) => handleToggleStatus(acc.id)}
         />
 
         {/* Scrollable Dashboard Body */}
@@ -3512,6 +3658,16 @@ export default function App() {
             </div>
           ) : (
             <>
+              {/* 0. Banner de Alertas e Lembretes de Vencimento de Contas a Pagar */}
+              <ReminderAlertBanner
+                reminders={financialReminders}
+                settings={reminderSettings}
+                onOpenSettings={() => setIsReminderModalOpen(true)}
+                onViewReminders={() => {
+                  setCurrentView('pagar');
+                }}
+              />
+
               {/* 1. Cards de Métricas & Médias Mensais */}
               <SummaryCards 
                 accounts={activeScopedAccounts} 
@@ -3519,7 +3675,16 @@ export default function App() {
                 companiesCount={permittedCompanies.length}
               />
 
-              {/* 2. Somatório das Empresas & Gráfico Comparativo (Renderizado no Dashboard Geral ou no modo Consolidado) */}
+              {/* 2. Gráfico de Barras: Previsão de Contas a Pagar (Próximos 7, 15 e 30 dias) */}
+              <UpcomingPayablesChart
+                accounts={isConsolidated ? tenantScopedAccounts : activeScopedAccounts}
+                companies={permittedCompanies}
+                darkMode={darkMode}
+                onQuickPayAccount={(acc) => handleToggleStatus(acc.id)}
+                onViewAllPayables={() => setCurrentView('pagar')}
+              />
+
+              {/* 3. Somatório das Empresas & Gráfico Comparativo (Renderizado no Dashboard Geral ou no modo Consolidado) */}
               {permittedCompanies.length > 1 && (
                 <ConsolidatedCompanyChart
                   companies={permittedCompanies}
@@ -3556,6 +3721,8 @@ export default function App() {
                 onOpenWebhookSimulator={() => setIsWebhookModalOpen(true)}
                 forcedTab={currentView}
                 isConsolidated={isConsolidated}
+                onClearAllAccounts={handleClearAllAccounts}
+                onOpenResetModal={() => setIsResetModalOpen(true)}
               />
             </>
           )}
@@ -3593,7 +3760,7 @@ export default function App() {
         onClose={() => setIsCsvModalOpen(false)}
         companies={permittedCompanies}
         accounts={activeScopedAccounts}
-        selectedCompanyId={selectedCompanyId}
+        selectedCompanyId={selectedCompanyId === -1 ? (permittedCompanies[0]?.id || 1) : selectedCompanyId}
         onImportAccounts={handleImportAccounts}
         initialTab={csvModalInitialTab}
       />
@@ -3602,7 +3769,7 @@ export default function App() {
         isOpen={isExtratoModalOpen}
         onClose={() => setIsExtratoModalOpen(false)}
         companies={permittedCompanies}
-        selectedCompanyId={selectedCompanyId}
+        selectedCompanyId={selectedCompanyId === -1 ? (permittedCompanies[0]?.id || 1) : selectedCompanyId}
         onImportAccounts={handleImportAccounts}
       />
 
@@ -3917,6 +4084,19 @@ export default function App() {
           setIsSecurityModalOpen(false);
           handleLogout('Sessão bloqueada manualmente a pedido do usuário.');
         }}
+      />
+
+      {/* 12. Modal de Configurações de Lembretes Financeiros & Prazo de Vencimento */}
+      <ReminderSettingsModal
+        isOpen={isReminderModalOpen}
+        onClose={() => setIsReminderModalOpen(false)}
+        settings={reminderSettings}
+        onSaveSettings={(newSettings) => {
+          setReminderSettings(newSettings);
+          saveReminderSettings(newSettings, currentUser?.id);
+        }}
+        totalAccountsOnRadar={financialReminders.length}
+        totalValueOnRadar={financialReminders.reduce((s, r) => s + Number(r.account.valor || 0), 0)}
       />
 
     </div>

@@ -14,6 +14,7 @@ import {
   setDoc,
   updateDoc,
   deleteDoc,
+  writeBatch,
   Firestore,
 } from "firebase/firestore";
 
@@ -3796,6 +3797,59 @@ async function startServer() {
     }
   });
 
+  // POST /api/accounts/clear-all: Zera todos os lançamentos financeiros da sessão/servidor
+  app.post("/api/accounts/clear-all", requireActiveTenantLicense, async (req, res) => {
+    try {
+      ensureServerDataDir();
+      let store: any = { users: [], companies: [], accounts: [], tenants: [], auditLogs: [] };
+      if (fs.existsSync(SYSTEM_STORE_PATH)) {
+        try {
+          store = JSON.parse(fs.readFileSync(SYSTEM_STORE_PATH, "utf8"));
+        } catch (e) {}
+      }
+
+      // Backup de segurança antes de zerar
+      try {
+        const BACKUP_DIR = path.join(SERVER_DATA_DIR, "backups");
+        if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
+        if (fs.existsSync(SYSTEM_STORE_PATH)) {
+          const prevRaw = fs.readFileSync(SYSTEM_STORE_PATH, "utf8");
+          fs.writeFileSync(path.join(BACKUP_DIR, `system_store_before_clear_all_${Date.now()}.json`), prevRaw, "utf8");
+        }
+      } catch (backupErr) {
+        console.warn("Aviso ao salvar backup pré-limpeza:", backupErr);
+      }
+
+      const prevCount = Array.isArray(store.accounts) ? store.accounts.length : 0;
+      store.accounts = [];
+      store.clearedAccountsTimestamp = Date.now();
+      store.hasCustomData = true;
+      store.updatedAt = new Date().toISOString();
+      fs.writeFileSync(SYSTEM_STORE_PATH, JSON.stringify(store, null, 2), "utf8");
+
+      // Background Firestore delete
+      (async () => {
+        try {
+          const snapshot = await getDocs(collection(db, "accounts"));
+          const batch = writeBatch(db);
+          snapshot.docs.forEach((d) => batch.delete(d.ref));
+          await batch.commit();
+        } catch (e) {}
+      })();
+
+      console.log(`🧹 [POST /api/accounts/clear-all] Todos os ${prevCount} lançamentos financeiros foram zerados com sucesso!`);
+      return res.status(200).json({
+        success: true,
+        message: "Todos os lançamentos financeiros foram zerados com sucesso.",
+        clearedCount: prevCount,
+        timestamp: store.clearedAccountsTimestamp,
+      });
+    } catch (err: any) {
+      console.error("Erro ao zerar lançamentos no servidor:", err);
+      return res.status(500).json({ success: false, error: err?.message });
+    }
+  });
+
   // POST /api/accounts: Cria ou atualiza conta financeira diretamente no servidor central
   app.post("/api/accounts", requireActiveTenantLicense, (req, res) => {
     try {
@@ -4057,23 +4111,19 @@ async function startServer() {
         : (Array.isArray(existingRecord.auditLogs) ? existingRecord.auditLogs : []);
 
       // Accounts persistence com proteção anti-wipe / anti-sobrescrita indevida:
-      const isExplicitRestore = payload.source === "backup_restore_replace" || payload.source === "wipe_all_data";
+      const isExplicitWipe = payload.clearAccounts === true || payload.source === "clear_accounts" || payload.source === "wipe_all_data";
+      const isExplicitRestore = payload.source === "backup_restore_replace";
       const existingAccountsList: any[] = Array.isArray(existingRecord.accounts) ? existingRecord.accounts : [];
 
       let finalAccounts: any[] = [];
       const clientAccountIds = new Set(accounts.map((a: any) => Number(a.id)));
 
-      const recentUnseenWebhookAccounts = existingAccountsList.filter((a: any) => {
-        if (!a || !a.id) return false;
-        const accId = Number(a.id);
-        if (deletedAccountIds.has(accId)) return false;
-        if (clientAccountIds.has(accId)) return false;
-        if (!a.criado_em) return false;
-        const ageMs = Date.now() - new Date(a.criado_em).getTime();
-        return ageMs >= 0 && ageMs < 60000 && (String(a.conciliado_por).includes("Webhook") || String(a.criado_por).includes("Webhook"));
-      });
-
-      if (isExplicitRestore) {
+      if (isExplicitWipe) {
+        // Usuário solicitou explicitamente zerar os lançamentos financeiros
+        finalAccounts = [];
+        existingRecord.clearedAccountsTimestamp = Date.now();
+        console.log(`🧹 [system-store] Lançamentos zerados explicitamente pelo usuário.`);
+      } else if (isExplicitRestore) {
         // Se for restauração explícita de backup solicitada pelo usuário
         const incomingAccounts = (Array.isArray(payload.accounts) ? payload.accounts : [])
           .filter((a: any) => a && !deletedAccountIds.has(Number(a.id)));
@@ -4093,28 +4143,35 @@ async function startServer() {
         incomingAccounts.forEach((a: any) => accountMap.set(Number(a.id), a));
         finalAccounts = Array.from(accountMap.values());
       } else if (Array.isArray(payload.accounts)) {
-        // Detectar se o cliente está enviando apenas dados de demo (IDs 101..107) enquanto o servidor tem contas reais
-        const isClientSendingOnlyDemo = accounts.length > 0 && accounts.every((a: any) => Number(a.id) >= 101 && Number(a.id) <= 107);
-        const hasExistingRealAccounts = existingAccountsList.some((a: any) => Number(a.id) < 101 || Number(a.id) > 107 || Number(a.empresa_id) > 5);
-
-        if (isClientSendingOnlyDemo && hasExistingRealAccounts) {
-          console.warn(`🛡️ [server.ts] BLOQUEADA sobrescrita com contas demo! Preservando ${existingAccountsList.length} contas do servidor.`);
-          finalAccounts = existingAccountsList.filter((a: any) => a && !deletedAccountIds.has(Number(a.id)));
+        // Se o servidor foi zerado recentemente e a chamada vem de cache local antigo, não reviver
+        const serverClearedAt = Number(existingRecord.clearedAccountsTimestamp || 0);
+        if (serverClearedAt > 0 && payload.source === "client_local_cache_recovery") {
+          console.warn(`🛡️ [server.ts] Bloqueada recuperação de cache antigo: o servidor foi zerado recentemente.`);
+          finalAccounts = [];
         } else {
-          // Merge seguro padrão para qualquer sincronização entre múltiplos computadores, notebooks ou celular:
-          // Garante que nenhum computador/notebook apague movimentações que foram cadastradas no outro!
-          const accountMap = new Map<number, any>();
-          existingAccountsList.forEach((a: any) => {
-            if (a && a.id && !deletedAccountIds.has(Number(a.id))) {
-              accountMap.set(Number(a.id), a);
-            }
-          });
-          accounts.forEach((a: any) => {
-            if (a && a.id && !deletedAccountIds.has(Number(a.id))) {
-              accountMap.set(Number(a.id), a);
-            }
-          });
-          finalAccounts = Array.from(accountMap.values());
+          // Detectar se o cliente está enviando apenas dados de demo (IDs 101..107) enquanto o servidor tem contas reais
+          const isClientSendingOnlyDemo = accounts.length > 0 && accounts.every((a: any) => Number(a.id) >= 101 && Number(a.id) <= 107);
+          const hasExistingRealAccounts = existingAccountsList.some((a: any) => Number(a.id) < 101 || Number(a.id) > 107 || Number(a.empresa_id) > 5);
+
+          if (isClientSendingOnlyDemo && hasExistingRealAccounts) {
+            console.warn(`🛡️ [server.ts] BLOQUEADA sobrescrita com contas demo! Preservando ${existingAccountsList.length} contas do servidor.`);
+            finalAccounts = existingAccountsList.filter((a: any) => a && !deletedAccountIds.has(Number(a.id)));
+          } else {
+            // Merge seguro padrão para qualquer sincronização entre múltiplos computadores, notebooks ou celular:
+            // Garante que nenhum computador/notebook apague movimentações que foram cadastradas no outro!
+            const accountMap = new Map<number, any>();
+            existingAccountsList.forEach((a: any) => {
+              if (a && a.id && !deletedAccountIds.has(Number(a.id))) {
+                accountMap.set(Number(a.id), a);
+              }
+            });
+            accounts.forEach((a: any) => {
+              if (a && a.id && !deletedAccountIds.has(Number(a.id))) {
+                accountMap.set(Number(a.id), a);
+              }
+            });
+            finalAccounts = Array.from(accountMap.values());
+          }
         }
       } else if (existingAccountsList.length > 0) {
         finalAccounts = existingAccountsList.filter((a: any) => a && !deletedAccountIds.has(Number(a.id)));
@@ -4130,6 +4187,7 @@ async function startServer() {
 
       const storeRecord = {
         hasCustomData: Boolean(payload.hasCustomData ?? true),
+        clearedAccountsTimestamp: existingRecord.clearedAccountsTimestamp || payload.clearedAccountsTimestamp || null,
         companies: finalCompanies,
         accounts: finalAccounts,
         users: finalUsers,
