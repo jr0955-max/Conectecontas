@@ -6,7 +6,9 @@ import {
   BankAccount, 
   CostCenter, 
   Tenant, 
-  AuditLog 
+  AuditLog,
+  FinancialNotepadState,
+  ReminderSettings
 } from '../types';
 
 export interface SystemStorePayload {
@@ -18,6 +20,8 @@ export interface SystemStorePayload {
   costCenters?: CostCenter[];
   tenants?: Tenant[];
   auditLogs?: AuditLog[];
+  notepadState?: FinancialNotepadState;
+  reminderSettings?: ReminderSettings;
   hasCustomData?: boolean;
   source?: string;
   deletedTenantId?: number;
@@ -167,6 +171,8 @@ export async function saveServerSystemStore(payload: SystemStorePayload, tenantI
         costCenters: payload.costCenters || [],
         tenants: payload.tenants || [],
         auditLogs: payload.auditLogs || [],
+        notepadState: payload.notepadState,
+        reminderSettings: payload.reminderSettings,
         clearedAccountsTimestamp: payload.clearedAccountsTimestamp,
         clearAccounts: payload.clearAccounts,
         source: payload.source || 'client_sync',

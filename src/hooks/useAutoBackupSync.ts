@@ -7,7 +7,9 @@ import {
   BankAccount, 
   CostCenter, 
   Tenant, 
-  AuditLog 
+  AuditLog,
+  FinancialNotepadState,
+  ReminderSettings
 } from '../types';
 import { saveServerSystemStore } from '../services/systemStoreService';
 import { restoreFullCloudSnapshot } from '../firebase';
@@ -21,6 +23,8 @@ export interface AutoBackupSyncParams {
   costCenters: CostCenter[];
   tenants: Tenant[];
   auditLogs: AuditLog[];
+  notepadState?: FinancialNotepadState;
+  reminderSettings?: ReminderSettings;
   currentUser: User | null;
   lastRestoredTimestampRef: React.MutableRefObject<number>;
   intervalMs?: number; // Padrão: 5000ms (5 segundos)
@@ -41,13 +45,15 @@ export interface AutoBackupSyncResult {
     costCenters?: CostCenter[];
     tenants?: Tenant[];
     auditLogs?: AuditLog[];
+    notepadState?: FinancialNotepadState;
+    reminderSettings?: ReminderSettings;
   }) => void;
 }
 
 /**
  * Gera uma assinatura determinística ultra-rápida (fingerprint 64-bit) de todos os dados locais.
  * Muda instantaneamente se qualquer movimentação, status de pagamento, empresa, usuário,
- * conta bancária, centro de custo ou log for modificado, adicionado ou removido.
+ * conta bancária, centro de custo, bloco de notas ou log for modificado, adicionado ou removido.
  */
 export function generateDataFingerprint(data: {
   companies: Company[];
@@ -58,6 +64,8 @@ export function generateDataFingerprint(data: {
   costCenters: CostCenter[];
   tenants: Tenant[];
   auditLogs: AuditLog[];
+  notepadState?: FinancialNotepadState;
+  reminderSettings?: ReminderSettings;
 }): string {
   let accRep = '';
   const sortedAccounts = [...data.accounts].sort((a, b) => Number(a.id) - Number(b.id));
@@ -113,7 +121,21 @@ export function generateDataFingerprint(data: {
 
   const logRep = `${data.auditLogs.length}:${data.auditLogs[0]?.id || ''}`;
 
-  const fullStr = `${compRep}#${accRep}#${userRep}#${linkRep}#${bankRep}#${ccRep}#${tenantRep}#${logRep}`;
+  let notepadRep = '';
+  if (data.notepadState && Array.isArray(data.notepadState.itens)) {
+    notepadRep = `np:${data.notepadState.itens.length}:${data.notepadState.ultimaAtualizacao || ''}:${data.notepadState.textoLivre || ''}`;
+    for (let i = 0; i < data.notepadState.itens.length; i++) {
+      const it = data.notepadState.itens[i];
+      if (it) notepadRep += `${it.id}:${it.descricao}:${it.valor || 0}:${it.concluido ? 1 : 0}:${it.destaqueVerde ? 1 : 0}:${it.empresa_id || 1};`;
+    }
+  }
+
+  let reminderRep = '';
+  if (data.reminderSettings) {
+    reminderRep = `rs:${data.reminderSettings.enabled ? 1 : 0}:${data.reminderSettings.dias_antecedencia}:${data.reminderSettings.avisar_vencendo_hoje ? 1 : 0}`;
+  }
+
+  const fullStr = `${compRep}#${accRep}#${userRep}#${linkRep}#${bankRep}#${ccRep}#${tenantRep}#${logRep}#${notepadRep}#${reminderRep}`;
 
   // Murmur-inspired fast 64-bit string hash
   let h1 = 0xdeadbeef;
@@ -143,6 +165,8 @@ export function useAutoBackupSync({
   costCenters,
   tenants,
   auditLogs,
+  notepadState,
+  reminderSettings,
   currentUser,
   lastRestoredTimestampRef,
   intervalMs = 5000,
@@ -164,6 +188,8 @@ export function useAutoBackupSync({
     costCenters,
     tenants,
     auditLogs,
+    notepadState,
+    reminderSettings,
     currentUser,
   });
 
@@ -177,9 +203,11 @@ export function useAutoBackupSync({
       costCenters,
       tenants,
       auditLogs,
+      notepadState,
+      reminderSettings,
       currentUser,
     };
-  }, [companies, accounts, users, userCompanies, bankAccounts, costCenters, tenants, auditLogs, currentUser]);
+  }, [companies, accounts, users, userCompanies, bankAccounts, costCenters, tenants, auditLogs, notepadState, reminderSettings, currentUser]);
 
   const lastSyncedFingerprintRef = useRef<string>('');
   const isSyncingRef = useRef<boolean>(false);
@@ -195,6 +223,8 @@ export function useAutoBackupSync({
     costCenters?: CostCenter[];
     tenants?: Tenant[];
     auditLogs?: AuditLog[];
+    notepadState?: FinancialNotepadState;
+    reminderSettings?: ReminderSettings;
   }) => {
     const dataToHash = {
       companies: customData?.companies ?? latestDataRef.current.companies,
@@ -205,6 +235,8 @@ export function useAutoBackupSync({
       costCenters: customData?.costCenters ?? latestDataRef.current.costCenters,
       tenants: customData?.tenants ?? latestDataRef.current.tenants,
       auditLogs: customData?.auditLogs ?? latestDataRef.current.auditLogs,
+      notepadState: customData?.notepadState ?? latestDataRef.current.notepadState,
+      reminderSettings: customData?.reminderSettings ?? latestDataRef.current.reminderSettings,
     };
     const fp = generateDataFingerprint(dataToHash);
     lastSyncedFingerprintRef.current = fp;
@@ -230,6 +262,8 @@ export function useAutoBackupSync({
       costCenters: currCostCenters,
       tenants: currTenants,
       auditLogs: currAuditLogs,
+      notepadState: currNotepadState,
+      reminderSettings: currReminderSettings,
       currentUser: currUser,
     } = latestDataRef.current;
 
@@ -252,6 +286,8 @@ export function useAutoBackupSync({
       costCenters: currCostCenters,
       tenants: currTenants,
       auditLogs: currAuditLogs,
+      notepadState: currNotepadState,
+      reminderSettings: currReminderSettings,
     });
 
     isSyncingRef.current = true;
@@ -271,6 +307,8 @@ export function useAutoBackupSync({
         costCenters: currCostCenters,
         tenants: currTenants,
         auditLogs: currAuditLogs,
+        notepadState: currNotepadState,
+        reminderSettings: currReminderSettings,
         source: 'scheduled_auto_sync',
       }, userTenantId);
 
@@ -328,6 +366,8 @@ export function useAutoBackupSync({
         costCenters: cc,
         tenants: t,
         auditLogs: al,
+        notepadState: np,
+        reminderSettings: rs,
       } = latestDataRef.current;
 
       const currentFp = generateDataFingerprint({
@@ -339,6 +379,8 @@ export function useAutoBackupSync({
         costCenters: cc,
         tenants: t,
         auditLogs: al,
+        notepadState: np,
+        reminderSettings: rs,
       });
 
       // Se ainda não inicializamos a linha de base (primeiro ciclo), definimos o estado inicial

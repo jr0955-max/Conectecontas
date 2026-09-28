@@ -36,6 +36,8 @@ const SERVER_DATA_DIR = path.join(process.cwd(), "server_data");
 const SYSTEM_STORE_PATH = path.join(SERVER_DATA_DIR, "system_store.json");
 const BANKING_CREDS_PATH = path.join(SERVER_DATA_DIR, "banking_credentials.json");
 const BANK_WEBHOOK_LOGS_PATH = path.join(SERVER_DATA_DIR, "bank_webhook_logs.json");
+const FINANCIAL_NOTEPAD_PATH = path.join(SERVER_DATA_DIR, "financial_notepad.json");
+const REMINDER_SETTINGS_PATH = path.join(SERVER_DATA_DIR, "reminder_settings.json");
 
 function ensureServerDataDir() {
   if (!fs.existsSync(SERVER_DATA_DIR)) {
@@ -51,6 +53,48 @@ function ensureServerDataDir() {
         console.warn("Aviso ao copiar baseline:", e);
       }
     }
+  }
+}
+
+function readLocalNotepads(): Record<string, any> {
+  try {
+    if (fs.existsSync(FINANCIAL_NOTEPAD_PATH)) {
+      const raw = fs.readFileSync(FINANCIAL_NOTEPAD_PATH, "utf8");
+      return JSON.parse(raw) || {};
+    }
+  } catch (e) {
+    console.warn("Erro ao ler financial_notepad.json:", e);
+  }
+  return {};
+}
+
+function saveLocalNotepads(data: Record<string, any>): void {
+  try {
+    ensureServerDataDir();
+    fs.writeFileSync(FINANCIAL_NOTEPAD_PATH, JSON.stringify(data, null, 2), "utf8");
+  } catch (e) {
+    console.error("Erro ao salvar financial_notepad.json:", e);
+  }
+}
+
+function readLocalReminderSettings(): Record<string, any> {
+  try {
+    if (fs.existsSync(REMINDER_SETTINGS_PATH)) {
+      const raw = fs.readFileSync(REMINDER_SETTINGS_PATH, "utf8");
+      return JSON.parse(raw) || {};
+    }
+  } catch (e) {
+    console.warn("Erro ao ler reminder_settings.json:", e);
+  }
+  return {};
+}
+
+function saveLocalReminderSettings(data: Record<string, any>): void {
+  try {
+    ensureServerDataDir();
+    fs.writeFileSync(REMINDER_SETTINGS_PATH, JSON.stringify(data, null, 2), "utf8");
+  } catch (e) {
+    console.error("Erro ao salvar reminder_settings.json:", e);
   }
 }
 
@@ -3446,6 +3490,14 @@ async function startServer() {
       if (fs.existsSync(SYSTEM_STORE_PATH)) {
         const raw = fs.readFileSync(SYSTEM_STORE_PATH, "utf8");
         const parsed = JSON.parse(raw);
+        const notepads = readLocalNotepads();
+        if (notepads["default"]) {
+          parsed.notepadState = notepads["default"];
+        }
+        const rSettings = readLocalReminderSettings();
+        if (rSettings["default"]) {
+          parsed.reminderSettings = rSettings["default"];
+        }
         return res.status(200).json({
           success: true,
           hasCustomData: Boolean(parsed.hasCustomData),
@@ -3461,6 +3513,145 @@ async function startServer() {
       });
     } catch (err: any) {
       console.error("Erro ao ler system-store:", err);
+      return res.status(500).json({ success: false, error: err?.message });
+    }
+  });
+
+  // GET /api/financial-notepad: Retorna o bloco de notas para sincronização em tempo real entre DuckDNS e LAN IP
+  app.get("/api/financial-notepad", (req, res) => {
+    try {
+      const tenantId = req.headers["x-tenant-id"] || req.query.tenant_id || "1";
+      const userId = req.headers["x-user-id"] || req.query.user_id;
+
+      const notepads = readLocalNotepads();
+      const tenantKey = `tenant_${tenantId}`;
+      const userKey = userId ? `user_${userId}` : null;
+
+      let found = (userKey && notepads[userKey]) || notepads[tenantKey] || notepads["default"];
+
+      if (!found && fs.existsSync(SYSTEM_STORE_PATH)) {
+        try {
+          const sys = JSON.parse(fs.readFileSync(SYSTEM_STORE_PATH, "utf8"));
+          if (sys.notepadState) {
+            found = sys.notepadState;
+          }
+        } catch (e) {}
+      }
+
+      if (found) {
+        return res.status(200).json({
+          success: true,
+          notepad: found,
+          updatedAt: found.ultimaAtualizacao || new Date().toISOString(),
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        notepad: null,
+        message: "Nenhuma anotação salva no servidor ainda.",
+      });
+    } catch (err: any) {
+      console.error("Erro ao ler financial-notepad:", err);
+      return res.status(500).json({ success: false, error: err?.message });
+    }
+  });
+
+  // POST /api/financial-notepad: Persiste alterações do bloco de notas imediatamente no disco do servidor
+  app.post("/api/financial-notepad", (req, res) => {
+    try {
+      const { notepad, tenantId, userId } = req.body || {};
+      if (!notepad || !Array.isArray(notepad.itens)) {
+        return res.status(400).json({ success: false, error: "Estrutura do bloco de notas inválida." });
+      }
+
+      const notepads = readLocalNotepads();
+      const effTenantId = tenantId || 1;
+      const tenantKey = `tenant_${effTenantId}`;
+      const userKey = userId ? `user_${userId}` : null;
+
+      const stampedNotepad = {
+        ...notepad,
+        ultimaAtualizacao: notepad.ultimaAtualizacao || new Date().toISOString(),
+      };
+
+      notepads[tenantKey] = stampedNotepad;
+      notepads["default"] = stampedNotepad;
+      if (userKey) {
+        notepads[userKey] = stampedNotepad;
+      }
+
+      saveLocalNotepads(notepads);
+
+      // Persistir no system_store.json para backups automáticos e consistência global
+      if (fs.existsSync(SYSTEM_STORE_PATH)) {
+        try {
+          const sys = JSON.parse(fs.readFileSync(SYSTEM_STORE_PATH, "utf8"));
+          sys.notepadState = stampedNotepad;
+          sys.updatedAt = new Date().toISOString();
+          fs.writeFileSync(SYSTEM_STORE_PATH, JSON.stringify(sys, null, 2), "utf8");
+        } catch (e) {}
+      }
+
+      console.log(`📝 [server.ts] Bloco de notas sincronizado no servidor com sucesso! Itens: ${stampedNotepad.itens.length}`);
+
+      return res.status(200).json({
+        success: true,
+        message: "Bloco de notas sincronizado no servidor com sucesso!",
+        notepad: stampedNotepad,
+      });
+    } catch (err: any) {
+      console.error("Erro ao salvar financial-notepad:", err);
+      return res.status(500).json({ success: false, error: err?.message });
+    }
+  });
+
+  // GET /api/reminder-settings: Retorna configurações de lembretes persistidas no servidor
+  app.get("/api/reminder-settings", (req, res) => {
+    try {
+      const tenantId = req.headers["x-tenant-id"] || req.query.tenant_id || "1";
+      const settingsMap = readLocalReminderSettings();
+      const tenantKey = `tenant_${tenantId}`;
+      let found = settingsMap[tenantKey] || settingsMap["default"];
+
+      if (!found && fs.existsSync(SYSTEM_STORE_PATH)) {
+        try {
+          const sys = JSON.parse(fs.readFileSync(SYSTEM_STORE_PATH, "utf8"));
+          if (sys.reminderSettings) found = sys.reminderSettings;
+        } catch (e) {}
+      }
+
+      if (found) {
+        return res.status(200).json({ success: true, settings: found });
+      }
+      return res.status(200).json({ success: true, settings: null });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message });
+    }
+  });
+
+  // POST /api/reminder-settings: Persiste configurações de lembretes no servidor
+  app.post("/api/reminder-settings", (req, res) => {
+    try {
+      const { settings, tenantId } = req.body || {};
+      if (!settings) return res.status(400).json({ success: false, error: "Configuração inválida." });
+
+      const settingsMap = readLocalReminderSettings();
+      const effTenantId = tenantId || 1;
+      settingsMap[`tenant_${effTenantId}`] = settings;
+      settingsMap["default"] = settings;
+      saveLocalReminderSettings(settingsMap);
+
+      if (fs.existsSync(SYSTEM_STORE_PATH)) {
+        try {
+          const sys = JSON.parse(fs.readFileSync(SYSTEM_STORE_PATH, "utf8"));
+          sys.reminderSettings = settings;
+          fs.writeFileSync(SYSTEM_STORE_PATH, JSON.stringify(sys, null, 2), "utf8");
+        } catch (e) {}
+      }
+
+      return res.status(200).json({ success: true, settings });
+    } catch (err: any) {
       return res.status(500).json({ success: false, error: err?.message });
     }
   });
@@ -4229,6 +4420,18 @@ async function startServer() {
       companies.forEach((c: any) => { if (c && c.id) companyMap.set(Number(c.id), c); });
       const finalCompanies = companyMap.size > 0 ? Array.from(companyMap.values()) : (existingRecord.companies || []);
 
+      // Sincronizar Bloco de Notas e Lembretes se enviados no payload
+      if (payload.notepadState && Array.isArray(payload.notepadState.itens)) {
+        const notepads = readLocalNotepads();
+        notepads["default"] = payload.notepadState;
+        saveLocalNotepads(notepads);
+      }
+      if (payload.reminderSettings) {
+        const rSettings = readLocalReminderSettings();
+        rSettings["default"] = payload.reminderSettings;
+        saveLocalReminderSettings(rSettings);
+      }
+
       const storeRecord = {
         hasCustomData: Boolean(payload.hasCustomData ?? true),
         clearedAccountsTimestamp: existingRecord.clearedAccountsTimestamp || payload.clearedAccountsTimestamp || null,
@@ -4240,6 +4443,8 @@ async function startServer() {
         costCenters: costCenters.length > 0 ? costCenters : (existingRecord.costCenters || []),
         tenants: finalTenants,
         auditLogs: finalLogs,
+        notepadState: payload.notepadState || existingRecord.notepadState || readLocalNotepads()["default"] || null,
+        reminderSettings: payload.reminderSettings || existingRecord.reminderSettings || readLocalReminderSettings()["default"] || null,
         updatedAt: new Date().toISOString(),
         source: payload.source || "sync_broadcast",
       };

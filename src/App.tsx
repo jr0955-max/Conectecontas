@@ -140,6 +140,12 @@ import {
   saveServerAccountsBatch,
   clearServerAccounts
 } from './services/systemStoreService';
+import {
+  fetchServerNotepad,
+  saveServerNotepad,
+  fetchServerReminderSettings,
+  saveServerReminderSettings
+} from './services/notepadService';
 
 export default function App() {
   // 0. Multi-tenant SAAS Hierarchy Persistence
@@ -329,6 +335,72 @@ export default function App() {
   const lastRestoredTimestampRef = useRef<number>(0);
   const recentlyDeletedAccountsRef = useRef<Map<number, number>>(new Map());
 
+  // 6. Lembretes Financeiros & Configuração de Prazo de Vencimento
+  const [reminderSettings, setReminderSettings] = useState<ReminderSettings>(() => {
+    return loadReminderSettings(currentUser?.id);
+  });
+  const [isReminderModalOpen, setIsReminderModalOpen] = useState<boolean>(false);
+  const lastReminderSavedTimestampRef = useRef<number>(0);
+
+  // 6.1 Bloco de Notas Financeiro (Contas a Lembrar antes de lançar oficialmente)
+  const [notepadState, setNotepadState] = useState<FinancialNotepadState>(() => {
+    return loadFinancialNotepadState(currentUser?.id);
+  });
+  const [isNotepadModalOpen, setIsNotepadModalOpen] = useState<boolean>(false);
+  const [notepadInitialEditId, setNotepadInitialEditId] = useState<string | null>(null);
+  const lastNotepadSavedTimestampRef = useRef<number>(0);
+
+  // Sincroniza o bloco de notas com o servidor na inicialização e troca de usuário
+  useEffect(() => {
+    // Carrega do cache local imediatamente
+    setNotepadState(loadFinancialNotepadState(currentUser?.id));
+
+    // Busca versão mais recente do servidor (DuckDNS / LAN IP)
+    const userTenantId = Number(currentUser?.tenant_id || 1);
+    fetchServerNotepad(userTenantId, currentUser?.id).then((serverNotepad) => {
+      if (serverNotepad && Array.isArray(serverNotepad.itens)) {
+        setNotepadState(serverNotepad);
+        saveFinancialNotepadState(serverNotepad, currentUser?.id);
+      }
+    }).catch(() => {});
+
+    fetchServerReminderSettings(userTenantId, currentUser?.id).then((serverSettings) => {
+      if (serverSettings) {
+        setReminderSettings(serverSettings);
+        saveReminderSettings(serverSettings, currentUser?.id);
+      }
+    }).catch(() => {});
+  }, [currentUser?.id, currentUser?.tenant_id]);
+
+  const handleSaveNotepad = (newState: FinancialNotepadState) => {
+    lastNotepadSavedTimestampRef.current = Date.now();
+    const stampedState: FinancialNotepadState = {
+      ...newState,
+      ultimaAtualizacao: new Date().toISOString(),
+    };
+    setNotepadState(stampedState);
+    saveFinancialNotepadState(stampedState, currentUser?.id);
+
+    // Persistência imediata no servidor central (garante que 192.168.1.63 e duckdns tenham exatamente os mesmos dados)
+    const userTenantId = Number(currentUser?.tenant_id || 1);
+    saveServerNotepad(stampedState, userTenantId, currentUser?.id).catch((err) => {
+      console.warn('Aviso ao sincronizar bloco de notas no servidor:', err);
+    });
+  };
+
+  const handleSaveReminderSettings = (newSettings: ReminderSettings) => {
+    lastReminderSavedTimestampRef.current = Date.now();
+    setReminderSettings(newSettings);
+    saveReminderSettings(newSettings, currentUser?.id);
+    const userTenantId = Number(currentUser?.tenant_id || 1);
+    saveServerReminderSettings(newSettings, userTenantId, currentUser?.id).catch(() => {});
+  };
+
+  const handleOpenNotepadModal = (editId?: string) => {
+    setNotepadInitialEditId(editId || null);
+    setIsNotepadModalOpen(true);
+  };
+
   // Tarefa Agendada (setInterval): Verifica periodicamente se os dados locais mudaram
   // e, caso positivo, dispara sincronização silenciosa para o Firebase e para o servidor central,
   // garantindo que o backup nunca fique defasado.
@@ -345,6 +417,8 @@ export default function App() {
     costCenters,
     tenants,
     auditLogs,
+    notepadState,
+    reminderSettings,
     currentUser,
     lastRestoredTimestampRef,
     intervalMs: 5000,
@@ -355,33 +429,6 @@ export default function App() {
   const [hasSelectedCompany, setHasSelectedCompany] = useState<boolean>(() => {
     return localStorage.getItem('fin_has_selected_company') === 'true';
   });
-
-  // 6. Lembretes Financeiros & Configuração de Prazo de Vencimento
-  const [reminderSettings, setReminderSettings] = useState<ReminderSettings>(() => {
-    return loadReminderSettings(currentUser?.id);
-  });
-  const [isReminderModalOpen, setIsReminderModalOpen] = useState<boolean>(false);
-
-  // 6.1 Bloco de Notas Financeiro (Contas a Lembrar antes de lançar oficialmente)
-  const [notepadState, setNotepadState] = useState<FinancialNotepadState>(() => {
-    return loadFinancialNotepadState(currentUser?.id);
-  });
-  const [isNotepadModalOpen, setIsNotepadModalOpen] = useState<boolean>(false);
-  const [notepadInitialEditId, setNotepadInitialEditId] = useState<string | null>(null);
-
-  useEffect(() => {
-    setNotepadState(loadFinancialNotepadState(currentUser?.id));
-  }, [currentUser?.id]);
-
-  const handleSaveNotepad = (newState: FinancialNotepadState) => {
-    setNotepadState(newState);
-    saveFinancialNotepadState(newState, currentUser?.id);
-  };
-
-  const handleOpenNotepadModal = (editId?: string) => {
-    setNotepadInitialEditId(editId || null);
-    setIsNotepadModalOpen(true);
-  };
 
   // SaaS Multi-Tenant License Block State (Triggered when server responds with 403 Forbidden on financial endpoints)
   const [isServerSubscriptionBlocked, setIsServerSubscriptionBlocked] = useState<boolean>(false);
@@ -502,6 +549,8 @@ export default function App() {
         costCenters,
         tenants,
         auditLogs,
+        notepadState,
+        reminderSettings,
         source: 'manual_navbar_sync_to_mobile',
       });
 
@@ -723,6 +772,37 @@ export default function App() {
             setAuditLogs(sData.auditLogs);
             localStorage.setItem('fin_audit_logs', JSON.stringify(sData.auditLogs));
           }
+
+          // Sincronização do Bloco de Notas Financeiro (mantém DuckDNS e LAN IP em perfeito sincronismo)
+          if (sData.notepadState && Array.isArray(sData.notepadState.itens)) {
+            const serverNotepad = sData.notepadState;
+            if (Date.now() - lastNotepadSavedTimestampRef.current > 1500) {
+              setNotepadState((prev) => {
+                const prevJson = JSON.stringify({ itens: prev?.itens || [], texto: prev?.textoLivre || '', empresas: prev?.textosPorEmpresa || {} });
+                const serverJson = JSON.stringify({ itens: serverNotepad.itens || [], texto: serverNotepad.textoLivre || '', empresas: serverNotepad.textosPorEmpresa || {} });
+                if (prevJson !== serverJson) {
+                  saveFinancialNotepadState(serverNotepad, currentUser?.id);
+                  return serverNotepad;
+                }
+                return prev;
+              });
+            }
+          }
+
+          // Sincronização de Configurações de Lembretes
+          if (sData.reminderSettings) {
+            const serverSettings = sData.reminderSettings;
+            if (Date.now() - lastReminderSavedTimestampRef.current > 1500) {
+              setReminderSettings((prev) => {
+                if (JSON.stringify(prev) !== JSON.stringify(serverSettings)) {
+                  saveReminderSettings(serverSettings, currentUser?.id);
+                  return serverSettings;
+                }
+                return prev;
+              });
+            }
+          }
+
           setCloudSynced(true);
           markAutoBackupSynced({
             companies: sData.companies,
@@ -733,6 +813,8 @@ export default function App() {
             costCenters: sData.costCenters,
             tenants: sData.tenants,
             auditLogs: sData.auditLogs,
+            notepadState: sData.notepadState,
+            reminderSettings: sData.reminderSettings,
           });
           return;
         }
@@ -771,6 +853,8 @@ export default function App() {
             costCenters: localCC,
             tenants: localTenants,
             auditLogs: localLogs,
+            notepadState: notepadState,
+            reminderSettings: reminderSettings,
             source: 'auto_client_backup_push',
           });
           console.log('✅ Dados reais do Preview salvos no servidor para acesso do celular!');
@@ -4315,10 +4399,7 @@ export default function App() {
         isOpen={isReminderModalOpen}
         onClose={() => setIsReminderModalOpen(false)}
         settings={reminderSettings}
-        onSaveSettings={(newSettings) => {
-          setReminderSettings(newSettings);
-          saveReminderSettings(newSettings, currentUser?.id);
-        }}
+        onSaveSettings={handleSaveReminderSettings}
         totalAccountsOnRadar={financialReminders.length}
         totalValueOnRadar={financialReminders.reduce((s, r) => s + Number(r.account.valor || 0), 0)}
       />
