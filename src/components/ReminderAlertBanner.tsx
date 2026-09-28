@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { AlertCircle, Clock, ChevronRight, X, Sliders, CheckCircle2 } from 'lucide-react';
+import { AlertCircle, Clock, ChevronRight, X, Sliders, CheckCircle2, StickyNote } from 'lucide-react';
 import { ReminderItem, ReminderSettings } from '../types';
 
 interface ReminderAlertBannerProps {
@@ -7,6 +7,8 @@ interface ReminderAlertBannerProps {
   settings: ReminderSettings;
   onOpenSettings: () => void;
   onViewReminders: () => void;
+  onOpenNotepad?: () => void;
+  notepadCount?: number;
 }
 
 export const ReminderAlertBanner: React.FC<ReminderAlertBannerProps> = ({
@@ -14,6 +16,8 @@ export const ReminderAlertBanner: React.FC<ReminderAlertBannerProps> = ({
   settings,
   onOpenSettings,
   onViewReminders,
+  onOpenNotepad,
+  notepadCount,
 }) => {
   const [isDismissed, setIsDismissed] = useState(false);
 
@@ -89,6 +93,22 @@ export const ReminderAlertBanner: React.FC<ReminderAlertBannerProps> = ({
 
         {/* Action Buttons */}
         <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+          {onOpenNotepad && (
+            <button
+              onClick={onOpenNotepad}
+              className="px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-xs bg-emerald-600 hover:bg-emerald-500 text-white"
+              title="Abrir Bloco de Notas Financeiro para anotar contas que lembrou"
+            >
+              <StickyNote className="w-3.5 h-3.5" />
+              <span>Bloco de Notas</span>
+              {notepadCount && notepadCount > 0 ? (
+                <span className="text-[10px] bg-emerald-700 px-1.5 py-0.2 rounded-full font-mono">
+                  {notepadCount}
+                </span>
+              ) : null}
+            </button>
+          )}
+
           <button
             onClick={onViewReminders}
             className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1 cursor-pointer shadow-xs ${

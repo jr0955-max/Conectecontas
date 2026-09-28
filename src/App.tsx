@@ -19,17 +19,22 @@ import {
   BillingInvoice,
   ReminderSettings,
   ReminderItem,
-  DEFAULT_REMINDER_SETTINGS
+  DEFAULT_REMINDER_SETTINGS,
+  FinancialNotepadState,
+  FinancialNoteItem
 } from './types';
 import { 
   loadReminderSettings, 
   saveReminderSettings, 
   calculateReminders, 
   playReminderChime, 
-  sendBrowserNotification 
+  sendBrowserNotification,
+  loadFinancialNotepadState,
+  saveFinancialNotepadState
 } from './utils/reminderService';
 import { ReminderSettingsModal } from './components/ReminderSettingsModal';
 import { ReminderAlertBanner } from './components/ReminderAlertBanner';
+import { FinancialNotepadModal } from './components/FinancialNotepadModal';
 import { UpcomingPayablesChart } from './components/UpcomingPayablesChart';
 import { 
   INITIAL_COMPANIES, 
@@ -74,6 +79,7 @@ import { SubscriptionModal } from './components/SubscriptionModal';
 import { InactivityWarningModal } from './components/InactivityWarningModal';
 import { SecuritySettingsModal } from './components/SecuritySettingsModal';
 import { useInactivityTimeout } from './hooks/useInactivityTimeout';
+import { useAutoBackupSync } from './hooks/useAutoBackupSync';
 import { 
   Building2,
   Users,
@@ -323,6 +329,28 @@ export default function App() {
   const lastRestoredTimestampRef = useRef<number>(0);
   const recentlyDeletedAccountsRef = useRef<Map<number, number>>(new Map());
 
+  // Tarefa Agendada (setInterval): Verifica periodicamente se os dados locais mudaram
+  // e, caso positivo, dispara sincronização silenciosa para o Firebase e para o servidor central,
+  // garantindo que o backup nunca fique defasado.
+  const {
+    isSilentSyncing,
+    lastAutoSyncTime,
+    markAsSynced: markAutoBackupSynced,
+  } = useAutoBackupSync({
+    companies,
+    accounts,
+    users,
+    userCompanies,
+    bankAccounts,
+    costCenters,
+    tenants,
+    auditLogs,
+    currentUser,
+    lastRestoredTimestampRef,
+    intervalMs: 5000,
+    enabled: Boolean(currentUser),
+  });
+
   // Flow State: Did user choose a subcompany in this session?
   const [hasSelectedCompany, setHasSelectedCompany] = useState<boolean>(() => {
     return localStorage.getItem('fin_has_selected_company') === 'true';
@@ -333,6 +361,27 @@ export default function App() {
     return loadReminderSettings(currentUser?.id);
   });
   const [isReminderModalOpen, setIsReminderModalOpen] = useState<boolean>(false);
+
+  // 6.1 Bloco de Notas Financeiro (Contas a Lembrar antes de lançar oficialmente)
+  const [notepadState, setNotepadState] = useState<FinancialNotepadState>(() => {
+    return loadFinancialNotepadState(currentUser?.id);
+  });
+  const [isNotepadModalOpen, setIsNotepadModalOpen] = useState<boolean>(false);
+  const [notepadInitialEditId, setNotepadInitialEditId] = useState<string | null>(null);
+
+  useEffect(() => {
+    setNotepadState(loadFinancialNotepadState(currentUser?.id));
+  }, [currentUser?.id]);
+
+  const handleSaveNotepad = (newState: FinancialNotepadState) => {
+    setNotepadState(newState);
+    saveFinancialNotepadState(newState, currentUser?.id);
+  };
+
+  const handleOpenNotepadModal = (editId?: string) => {
+    setNotepadInitialEditId(editId || null);
+    setIsNotepadModalOpen(true);
+  };
 
   // SaaS Multi-Tenant License Block State (Triggered when server responds with 403 Forbidden on financial endpoints)
   const [isServerSubscriptionBlocked, setIsServerSubscriptionBlocked] = useState<boolean>(false);
@@ -471,6 +520,7 @@ export default function App() {
       });
 
       setCloudSynced(true);
+      markAutoBackupSynced();
 
       if (saveOk) {
         setSyncFeedback({
@@ -674,6 +724,16 @@ export default function App() {
             localStorage.setItem('fin_audit_logs', JSON.stringify(sData.auditLogs));
           }
           setCloudSynced(true);
+          markAutoBackupSynced({
+            companies: sData.companies,
+            accounts: sData.accounts,
+            users: sData.users,
+            userCompanies: sData.userCompanies,
+            bankAccounts: sData.bankAccounts,
+            costCenters: sData.costCenters,
+            tenants: sData.tenants,
+            auditLogs: sData.auditLogs,
+          });
           return;
         }
 
@@ -727,6 +787,10 @@ export default function App() {
           localStorage.setItem('fin_accounts', JSON.stringify(data.accounts));
         }
         setCloudSynced(true);
+        markAutoBackupSynced({
+          companies: data.companies,
+          accounts: data.accounts,
+        });
       } catch (e) {
         console.debug('Sync direto nuvem:', e);
       }
@@ -1060,6 +1124,15 @@ export default function App() {
       }
     }
   }, [permittedCompanies, selectedCompanyId, currentUser]);
+
+  // Contagem de anotações do bloco de notas separada por empresa ativa
+  const activeCompanyNotepadCount = useMemo(() => {
+    if (!notepadState?.itens) return 0;
+    if (selectedCompanyId && selectedCompanyId > 0) {
+      return notepadState.itens.filter((i) => !i.concluido && Number(i.empresa_id || 1) === Number(selectedCompanyId)).length;
+    }
+    return notepadState.itens.filter((i) => !i.concluido).length;
+  }, [notepadState?.itens, selectedCompanyId]);
 
   // Sync to local storage
   useEffect(() => {
@@ -1949,6 +2022,64 @@ export default function App() {
       descricao: `Criou o lançamento "${accountToAdd.descricao}" no valor de R$ ${accountToAdd.valor.toFixed(2)} (${accountToAdd.tipo === 'pagar' ? 'A Pagar' : 'A Receber'})`,
       detalhes: { account: accountToAdd },
     }).catch((e) => console.warn('Audit log error:', e));
+  };
+
+  const handleLaunchNoteToAccount = async (
+    note: FinancialNoteItem,
+    targetEmpresaId?: number,
+    categoria?: string
+  ): Promise<boolean> => {
+    try {
+      const empresaFinal = targetEmpresaId || (selectedCompanyId > 0 ? selectedCompanyId : permittedCompanies[0]?.id || 1);
+      
+      let dataVenc = new Date().toISOString().split('T')[0];
+      if (note.dataVencimentoAproximada) {
+        const clean = note.dataVencimentoAproximada.trim();
+        if (/^\d{4}-\d{2}-\d{2}$/.test(clean)) {
+          dataVenc = clean;
+        } else {
+          const diaMatch = clean.match(/\d{1,2}/);
+          if (diaMatch) {
+            const dia = parseInt(diaMatch[0], 10);
+            if (dia >= 1 && dia <= 31) {
+              const now = new Date();
+              const ano = now.getFullYear();
+              const mes = String(now.getMonth() + 1).padStart(2, '0');
+              dataVenc = `${ano}-${mes}-${String(dia).padStart(2, '0')}`;
+            }
+          }
+        }
+      }
+
+      handleAddAccount({
+        descricao: note.descricao,
+        valor: Number(note.valor || 0),
+        tipo: 'pagar',
+        status: 'Pendente',
+        data_vencimento: dataVenc,
+        categoria: categoria || note.categoriaSugerida || 'Despesas Gerais',
+        empresa_id: Number(empresaFinal),
+        observacoes: note.observacao ? `[Origem: Bloco de Notas] ${note.observacao}` : '[Origem: Bloco de Notas]',
+      });
+
+      // Atualiza o item no bloco como lançado no sistema
+      const updatedItens = notepadState.itens.map((it) =>
+        it.id === note.id
+          ? { ...it, lancadoNoSistema: true, concluido: true, atualizadoEm: new Date().toISOString() }
+          : it
+      );
+      const updatedState: FinancialNotepadState = {
+        ...notepadState,
+        itens: updatedItens,
+        ultimaAtualizacao: new Date().toISOString(),
+      };
+      setNotepadState(updatedState);
+      saveFinancialNotepadState(updatedState, currentUser?.id);
+      return true;
+    } catch (err) {
+      console.error('Erro ao converter anotação em conta oficial:', err);
+      return false;
+    }
   };
 
   const handleEditAccount = (updatedAcc: FinancialAccount) => {
@@ -3664,6 +3795,8 @@ export default function App() {
         onToggleTheme={() => setDarkMode(!darkMode)}
         onOpenReminderSettings={() => setIsReminderModalOpen(true)}
         remindersCount={financialReminders.length}
+        onOpenNotepadModal={() => handleOpenNotepadModal()}
+        notepadCount={activeCompanyNotepadCount}
       />
 
       {/* 2. Main Content View Area */}
@@ -3702,10 +3835,16 @@ export default function App() {
           currentViewTitle={getTitleByView()}
           onForceSync={handleForceCloudSync}
           isSyncing={isSyncing}
+          isSilentSyncing={isSilentSyncing}
+          lastAutoSyncTime={lastAutoSyncTime}
           reminders={financialReminders}
           reminderSettings={reminderSettings}
           onOpenReminderSettings={() => setIsReminderModalOpen(true)}
           onQuickPayAccount={(acc) => handleToggleStatus(acc.id)}
+          notepadState={notepadState}
+          onSaveNotepad={handleSaveNotepad}
+          onOpenNotepadModal={(editId?: string) => handleOpenNotepadModal(editId)}
+          onLaunchNoteToAccount={(note) => handleLaunchNoteToAccount(note)}
         />
 
         {/* Scrollable Dashboard Body */}
@@ -3749,6 +3888,8 @@ export default function App() {
                 onViewReminders={() => {
                   setCurrentView('pagar');
                 }}
+                onOpenNotepad={() => handleOpenNotepadModal()}
+                notepadCount={activeCompanyNotepadCount}
               />
 
               {/* 1. Cards de Métricas & Médias Mensais */}
@@ -4180,6 +4321,22 @@ export default function App() {
         }}
         totalAccountsOnRadar={financialReminders.length}
         totalValueOnRadar={financialReminders.reduce((s, r) => s + Number(r.account.valor || 0), 0)}
+      />
+
+      {/* 13. Modal do Bloco de Notas Financeiro (Contas a Lembrar) */}
+      <FinancialNotepadModal
+        isOpen={isNotepadModalOpen}
+        onClose={() => {
+          setIsNotepadModalOpen(false);
+          setNotepadInitialEditId(null);
+        }}
+        notepadState={notepadState}
+        onSaveNotepad={handleSaveNotepad}
+        companies={permittedCompanies}
+        selectedCompanyId={selectedCompanyId}
+        onLaunchToAccounts={(item, empresaId, cat) => handleLaunchNoteToAccount(item, empresaId, cat)}
+        initialEditItemId={notepadInitialEditId}
+        onClearInitialEditItemId={() => setNotepadInitialEditId(null)}
       />
 
     </div>

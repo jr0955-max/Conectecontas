@@ -36,7 +36,8 @@ import {
   RefreshCw,
   Sun,
   Moon,
-  Bell
+  Bell,
+  StickyNote
 } from 'lucide-react';
 import { User, Company, getUserEffectivePermissions } from '../types';
 
@@ -67,6 +68,8 @@ interface SidebarProps {
   onOpenSecurityModal?: () => void;
   onOpenReminderSettings?: () => void;
   remindersCount?: number;
+  onOpenNotepadModal?: () => void;
+  notepadCount?: number;
   onDownloadAppPy: () => void;
   currentUser: User;
   onLogout: () => void;
@@ -125,6 +128,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onToggleTheme,
   onOpenReminderSettings,
   remindersCount = 0,
+  onOpenNotepadModal,
+  notepadCount = 0,
 }) => {
   const isMaster = Boolean(
     currentUser?.is_master || 
@@ -276,6 +281,32 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   <span className="text-[10px] font-mono font-bold text-slate-400 group-hover:text-amber-300 transition-colors">
                     Config
                   </span>
+                </button>
+              )}
+
+              {onOpenNotepadModal && (
+                <button
+                  id="nav-btn-financial-notepad"
+                  onClick={() => {
+                    onOpenNotepadModal();
+                    onCloseMobile();
+                  }}
+                  className="w-full flex items-center justify-between px-3 py-2 text-slate-300 hover:text-white hover:bg-slate-800/70 transition-colors rounded-lg text-sm font-medium cursor-pointer text-left group"
+                  title="Bloco de Notas Financeiro - Anotar contas que lembrou para não esquecer"
+                >
+                  <div className="flex items-center gap-3">
+                    <StickyNote className="w-4 h-4 opacity-90 text-emerald-400 shrink-0 group-hover:scale-110 transition-transform" />
+                    <span>Bloco de Notas</span>
+                  </div>
+                  {notepadCount > 0 ? (
+                    <span className="text-[10px] font-mono font-bold bg-emerald-500/25 text-emerald-300 border border-emerald-500/40 px-1.5 py-0.2 rounded-full shrink-0">
+                      {notepadCount}
+                    </span>
+                  ) : (
+                    <span className="text-[10px] font-mono font-bold text-slate-400 group-hover:text-emerald-300 transition-colors">
+                      Novo
+                    </span>
+                  )}
                 </button>
               )}
 

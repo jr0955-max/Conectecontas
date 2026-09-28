@@ -633,4 +633,27 @@ export interface ReminderItem {
   empresaNome?: string;
 }
 
+export interface FinancialNoteItem {
+  id: string;
+  descricao: string; // Ex: "MINHA CASA MINHA VIDA", "PREVIDENCIA", "CARTAO DE CREDITO"
+  valor?: number | null; // Ex: 450.00
+  dataVencimentoAproximada?: string; // Ex: "15" ou "2026-10-15" ou "Todo dia 10"
+  destaqueVerde: boolean; // Destaque marca-texto verde (como visto no bloco de notas)
+  concluido?: boolean; // Marcado/concluído
+  observacao?: string;
+  categoriaSugerida?: string;
+  empresa_id?: number;
+  criadoEm: string;
+  atualizadoEm: string;
+  lancadoNoSistema?: boolean;
+  contaIdLancada?: number;
+}
+
+export interface FinancialNotepadState {
+  itens: FinancialNoteItem[];
+  textoLivre: string;
+  textosPorEmpresa?: Record<number, string>; // Caderno livre de anotações separado por empresa
+  ultimaAtualizacao: string;
+}
+
 
