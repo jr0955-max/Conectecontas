@@ -264,6 +264,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 )}
               </button>
 
+              <button
+                id="nav-btn-receber"
+                onClick={() => {
+                  onChangeView('receber');
+                  onCloseMobile();
+                }}
+                className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer text-left ${
+                  currentView === 'receber'
+                    ? 'bg-blue-600 text-white shadow-xs'
+                    : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
+                }`}
+              >
+                <ArrowUpCircle className="w-4 h-4 opacity-90 text-emerald-400 shrink-0" />
+                <span>Contas a Receber</span>
+              </button>
+
               {onOpenReminderSettings && (
                 <button
                   id="nav-btn-reminders-config"
@@ -309,22 +325,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   )}
                 </button>
               )}
-
-              <button
-                id="nav-btn-receber"
-                onClick={() => {
-                  onChangeView('receber');
-                  onCloseMobile();
-                }}
-                className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer text-left ${
-                  currentView === 'receber'
-                    ? 'bg-blue-600 text-white shadow-xs'
-                    : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
-                }`}
-              >
-                <ArrowUpCircle className="w-4 h-4 opacity-90 text-emerald-400 shrink-0" />
-                <span>Contas a Receber</span>
-              </button>
 
               {onOpenCashflowModal && permissions.pode_ver_projecao && (
                 <button
