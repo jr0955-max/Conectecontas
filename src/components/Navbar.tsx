@@ -27,7 +27,7 @@ import {
   Pencil
 } from 'lucide-react';
 import { Company, User, Tenant, getUserEffectivePermissions, FinancialAccount, ReminderItem, ReminderSettings, FinancialNoteItem, FinancialNotepadState } from '../types';
-import { formatReminderDueDate, checkNoteReminderStatus } from '../utils/reminderService';
+import { formatReminderDueDate, checkNoteReminderStatus, formatNoteDueDate } from '../utils/reminderService';
 import { ArrowLeftRight } from 'lucide-react';
 
 interface NavbarProps {
@@ -768,9 +768,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                                   {note.dataVencimentoAproximada && (
                                     <span className="text-[10px] text-slate-500 dark:text-slate-400 flex items-center gap-0.5">
                                       <Calendar className="w-2.5 h-2.5" />
-                                      {note.dataVencimentoAproximada.toLowerCase().includes('dia')
-                                        ? note.dataVencimentoAproximada
-                                        : `Dia ${note.dataVencimentoAproximada}`}
+                                      {formatNoteDueDate(note.dataVencimentoAproximada)}
                                     </span>
                                   )}
 

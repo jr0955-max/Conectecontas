@@ -22,6 +22,8 @@ import {
   Bell
 } from 'lucide-react';
 import { FinancialNoteItem, FinancialNotepadState, Company } from '../types';
+import { WindowsDatePicker } from './WindowsDatePicker';
+import { checkNoteReminderStatus, formatNoteDueDate } from '../utils/reminderService';
 
 interface FinancialNotepadModalProps {
   isOpen: boolean;
@@ -124,52 +126,7 @@ export const FinancialNotepadModal: React.FC<FinancialNotepadModalProps> = ({
 
   // Avalia se o vencimento anotado está próximo para exibir alerta de lembrete financeiro
   const getNoteReminderStatus = (dataAprox?: string) => {
-    if (!dataAprox) return null;
-    const clean = dataAprox.trim();
-    const now = new Date();
-    const currentDay = now.getDate();
-    const currentYear = now.getFullYear();
-    const currentMonth = now.getMonth();
-
-    let targetDate: Date | null = null;
-    if (/^\d{4}-\d{2}-\d{2}$/.test(clean)) {
-      const [y, m, d] = clean.split('-').map(Number);
-      targetDate = new Date(y, m - 1, d, 0, 0, 0, 0);
-    } else {
-      const diaMatch = clean.match(/\d{1,2}/);
-      if (diaMatch) {
-        const dia = parseInt(diaMatch[0], 10);
-        if (dia >= 1 && dia <= 31) {
-          targetDate = new Date(currentYear, currentMonth, dia, 0, 0, 0, 0);
-        }
-      }
-    }
-
-    if (!targetDate) return null;
-
-    const today = new Date(currentYear, currentMonth, currentDay, 0, 0, 0, 0);
-    const diffDays = Math.round((targetDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-
-    if (diffDays === 0) {
-      return {
-        label: 'Vence Hoje!',
-        badgeClass: 'bg-amber-100 text-amber-900 dark:bg-amber-950/90 dark:text-amber-200 border-amber-400 dark:border-amber-700 animate-pulse font-extrabold',
-        isAlert: true,
-      };
-    } else if (diffDays > 0 && diffDays <= 3) {
-      return {
-        label: `Vence em ${diffDays} ${diffDays === 1 ? 'dia' : 'dias'}`,
-        badgeClass: 'bg-blue-100 text-blue-900 dark:bg-blue-950/80 dark:text-blue-200 border-blue-300 dark:border-blue-700 font-bold',
-        isAlert: true,
-      };
-    } else if (diffDays < 0 && diffDays >= -5) {
-      return {
-        label: `Venceu há ${Math.abs(diffDays)} dias`,
-        badgeClass: 'bg-rose-100 text-rose-800 dark:bg-rose-950/80 dark:text-rose-300 border-rose-300 dark:border-rose-800 font-semibold',
-        isAlert: false,
-      };
-    }
-    return null;
+    return checkNoteReminderStatus(dataAprox, 3);
   };
 
   const handleStartEdit = (item: FinancialNoteItem) => {
@@ -653,12 +610,12 @@ export const FinancialNotepadModal: React.FC<FinancialNotepadModalProps> = ({
                         <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
                           Dia ou Data de Vencimento
                         </label>
-                        <input
-                          type="text"
+                        <WindowsDatePicker
                           value={editVencimento}
-                          onChange={(e) => setEditVencimento(e.target.value)}
-                          placeholder="Ex: Dia 15 ou 2026-10-15"
-                          className="w-full px-3 py-2 text-xs bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-blue-500 text-slate-900 dark:text-white"
+                          onChange={(val) => setEditVencimento(val)}
+                          placeholder="Ex: 25/10/2026 ou Dia 15"
+                          className="w-full"
+                          inputClassName="w-full"
                         />
                       </div>
 
@@ -788,14 +745,13 @@ export const FinancialNotepadModal: React.FC<FinancialNotepadModalProps> = ({
                     />
                   </div>
 
-                  <div className="w-full sm:w-24 relative">
-                    <input
-                      type="text"
-                      placeholder="Dia/Venc."
+                  <div className="w-full sm:w-40 relative">
+                    <WindowsDatePicker
                       value={novoVencimento}
-                      onChange={(e) => setNovoVencimento(e.target.value)}
-                      className="w-full px-2.5 py-2 text-xs bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-emerald-500 text-slate-900 dark:text-white placeholder:text-slate-400"
-                      title="Ex: Dia 15 ou 2026-10-15"
+                      onChange={(val) => setNovoVencimento(val)}
+                      placeholder="Data Venc. (25/10)"
+                      className="w-full"
+                      inputClassName="w-full focus:ring-emerald-500"
                     />
                   </div>
 
@@ -991,11 +947,7 @@ export const FinancialNotepadModal: React.FC<FinancialNotepadModalProps> = ({
                               {item.dataVencimentoAproximada && (
                                 <span className="flex items-center gap-1 font-semibold text-slate-700 dark:text-slate-300">
                                   <Calendar className="w-3 h-3 text-slate-400" />
-                                  {item.dataVencimentoAproximada.startsWith('20')
-                                    ? new Date(item.dataVencimentoAproximada + 'T00:00:00').toLocaleDateString('pt-BR')
-                                    : item.dataVencimentoAproximada.toLowerCase().includes('dia')
-                                    ? item.dataVencimentoAproximada
-                                    : `Dia ${item.dataVencimentoAproximada}`}
+                                  {formatNoteDueDate(item.dataVencimentoAproximada)}
                                 </span>
                               )}
 

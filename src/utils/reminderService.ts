@@ -86,6 +86,97 @@ export function getNotesForCompany(state: FinancialNotepadState, companyId?: num
 }
 
 /**
+ * Converte qualquer representação de data (ISO, DD/MM/AAAA, Dia X) em Date válido
+ */
+export function parseNoteDate(dataAprox?: string): Date | null {
+  if (!dataAprox) return null;
+  const clean = dataAprox.trim();
+  if (!clean) return null;
+
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const currentMonth = now.getMonth();
+  const currentDay = now.getDate();
+
+  // 1. "hoje", "amanhã"
+  if (/^hoje$/i.test(clean)) {
+    return new Date(currentYear, currentMonth, currentDay, 0, 0, 0, 0);
+  }
+  if (/^amanh[aã]$/i.test(clean)) {
+    return new Date(currentYear, currentMonth, currentDay + 1, 0, 0, 0, 0);
+  }
+
+  // 2. Formato YYYY-MM-DD (e.g. 2026-10-25)
+  const ymdMatch = clean.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
+  if (ymdMatch) {
+    const y = parseInt(ymdMatch[1], 10);
+    const m = parseInt(ymdMatch[2], 10) - 1;
+    const d = parseInt(ymdMatch[3], 10);
+    return new Date(y, m, d, 0, 0, 0, 0);
+  }
+
+  // 3. Formato DD/MM/YYYY ou DD-MM-YYYY ou DD.MM.YYYY (e.g. 25/10/2026)
+  const dmyMatch = clean.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})$/);
+  if (dmyMatch) {
+    const d = parseInt(dmyMatch[1], 10);
+    const m = parseInt(dmyMatch[2], 10) - 1;
+    let y = parseInt(dmyMatch[3], 10);
+    if (y < 100) y += 2000;
+    return new Date(y, m, d, 0, 0, 0, 0);
+  }
+
+  // 4. Formato DD/MM (e.g. 25/10)
+  const dmMatch = clean.match(/^(\d{1,2})[-/.](\d{1,2})$/);
+  if (dmMatch) {
+    const d = parseInt(dmMatch[1], 10);
+    const m = parseInt(dmMatch[2], 10) - 1;
+    return new Date(currentYear, m, d, 0, 0, 0, 0);
+  }
+
+  // 5. Formato "Dia 15" ou apenas "15" (apenas se for somente número de 1 a 31)
+  const exactDiaMatch = clean.match(/^(?:dia\s*)?(\d{1,2})$/i);
+  if (exactDiaMatch) {
+    const dia = parseInt(exactDiaMatch[1], 10);
+    if (dia >= 1 && dia <= 31) {
+      return new Date(currentYear, currentMonth, dia, 0, 0, 0, 0);
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Converte qualquer representação de data em formato amigável brasileiro
+ */
+export function formatNoteDueDate(dataAprox?: string): string {
+  if (!dataAprox) return '';
+  const clean = dataAprox.trim();
+  if (!clean) return '';
+
+  // Se já for DD/MM/AAAA
+  if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(clean)) {
+    return clean;
+  }
+
+  // Se for YYYY-MM-DD
+  const ymdMatch = clean.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (ymdMatch) {
+    const [, y, m, d] = ymdMatch;
+    return `${d.padStart(2, '0')}/${m.padStart(2, '0')}/${y}`;
+  }
+
+  // Se tiver a palavra dia ou for apenas um número
+  if (/^dia\s+\d+/i.test(clean)) {
+    return clean;
+  }
+  if (/^\d{1,2}$/.test(clean)) {
+    return `Dia ${clean}`;
+  }
+
+  return clean;
+}
+
+/**
  * Avalia se uma anotação possui vencimento próximo ou vencendo hoje
  */
 export function checkNoteReminderStatus(dataAprox?: string, diasAntecedencia: number = 3): {
@@ -96,29 +187,11 @@ export function checkNoteReminderStatus(dataAprox?: string, diasAntecedencia: nu
   diffDays: number;
 } | null {
   if (!dataAprox) return null;
-  const clean = dataAprox.trim();
-  const now = new Date();
-  const currentDay = now.getDate();
-  const currentYear = now.getFullYear();
-  const currentMonth = now.getMonth();
-
-  let targetDate: Date | null = null;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(clean)) {
-    const [y, m, d] = clean.split('-').map(Number);
-    targetDate = new Date(y, m - 1, d, 0, 0, 0, 0);
-  } else {
-    const diaMatch = clean.match(/\d{1,2}/);
-    if (diaMatch) {
-      const dia = parseInt(diaMatch[0], 10);
-      if (dia >= 1 && dia <= 31) {
-        targetDate = new Date(currentYear, currentMonth, dia, 0, 0, 0, 0);
-      }
-    }
-  }
-
+  const targetDate = parseNoteDate(dataAprox);
   if (!targetDate) return null;
 
-  const today = new Date(currentYear, currentMonth, currentDay, 0, 0, 0, 0);
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
   const diffDays = Math.round((targetDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
 
   if (diffDays === 0) {
@@ -129,20 +202,28 @@ export function checkNoteReminderStatus(dataAprox?: string, diasAntecedencia: nu
       label: 'Vence Hoje!',
       badgeClass: 'bg-amber-100 text-amber-900 dark:bg-amber-950/90 dark:text-amber-200 border-amber-400 dark:border-amber-700 animate-pulse font-extrabold',
     };
-  } else if (diffDays > 0 && diffDays <= diasAntecedencia) {
+  } else if (diffDays === 1) {
     return {
       isAlert: true,
       urgencia: 'proximo',
       diffDays,
-      label: `Vence em ${diffDays} ${diffDays === 1 ? 'dia' : 'dias'}`,
+      label: 'Vence Amanhã!',
+      badgeClass: 'bg-blue-100 text-blue-900 dark:bg-blue-950/80 dark:text-blue-200 border-blue-400 dark:border-blue-700 font-bold',
+    };
+  } else if (diffDays > 1 && diffDays <= diasAntecedencia) {
+    return {
+      isAlert: true,
+      urgencia: 'proximo',
+      diffDays,
+      label: `Vence em ${diffDays} dias`,
       badgeClass: 'bg-blue-100 text-blue-900 dark:bg-blue-950/80 dark:text-blue-200 border-blue-300 dark:border-blue-700 font-bold',
     };
-  } else if (diffDays < 0 && diffDays >= -5) {
+  } else if (diffDays < 0 && diffDays >= -30) {
     return {
-      isAlert: false,
+      isAlert: true,
       urgencia: 'atrasado',
       diffDays,
-      label: `Venceu há ${Math.abs(diffDays)} dias`,
+      label: diffDays === -1 ? 'Venceu ontem' : `Venceu há ${Math.abs(diffDays)} dias`,
       badgeClass: 'bg-rose-100 text-rose-800 dark:bg-rose-950/80 dark:text-rose-300 border-rose-300 dark:border-rose-800 font-semibold',
     };
   }

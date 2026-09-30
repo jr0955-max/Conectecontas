@@ -22,11 +22,20 @@ npm install
 echo "🔨 Compilando aplicação e servidor (npm run build)..."
 npm run build
 
-# 4. Recarregar processo com zero downtime via PM2
+# 4. Recarregar processo no PM2
 if command -v pm2 &> /dev/null; then
-  echo "🔄 Recarregando serviço no PM2..."
-  pm2 reload financeiro || pm2 restart financeiro || pm2 start dist/server.cjs --name "financeiro"
+  echo "🔄 Verificando e recarregando serviço no PM2..."
+  # Se já existir o processo financeiro, reinicia/recarrega; senão inicia
+  if pm2 describe financeiro &> /dev/null; then
+    pm2 reload financeiro || pm2 restart financeiro
+  else
+    pm2 start dist/server.cjs --name "financeiro"
+  fi
   pm2 save
+
+  echo ""
+  echo "📊 Status dos processos no PM2:"
+  pm2 list
 else
   echo "⚠️ PM2 não detectado globalmente. Se estiver rodando com node direto, reinicie o processo."
 fi
