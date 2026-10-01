@@ -49,6 +49,7 @@ import {
   Camera,
   Sparkles,
   Lightbulb,
+  ArrowRightLeft,
 } from 'lucide-react';
 import { BankPaymentModal } from './BankPaymentModal';
 import { CameraScannerModal } from './CameraScannerModal';
@@ -63,6 +64,7 @@ interface AccountsTableProps {
   currentUser?: User;
   onAddAccount: (account: Omit<FinancialAccount, 'id'>) => void;
   onEditAccount?: (account: FinancialAccount) => void;
+  onBulkTransferCompany?: (accountIds: number[], targetEmpresaId: number) => void;
   onToggleStatus: (id: number) => void;
   onDeleteAccount: (id: number) => void;
   onAccountPaidViaBank?: (result: any) => void;
@@ -92,6 +94,7 @@ export const AccountsTable: React.FC<AccountsTableProps> = ({
   currentUser,
   onAddAccount,
   onEditAccount,
+  onBulkTransferCompany,
   onToggleStatus,
   onDeleteAccount,
   onAccountPaidViaBank,
@@ -159,6 +162,25 @@ export const AccountsTable: React.FC<AccountsTableProps> = ({
     toName: string;
     toId: number;
   } | null>(null);
+
+  // Seleção múltipla para ações em lote (Transferir empresa em massa, alternar status)
+  const [selectedAccountIds, setSelectedAccountIds] = useState<Set<number>>(new Set());
+  const [bulkTargetEmpresaId, setBulkTargetEmpresaId] = useState<number>(() => {
+    return companies[0]?.id ? Number(companies[0].id) : 1;
+  });
+  const [isBulkTransferring, setIsBulkTransferring] = useState<boolean>(false);
+
+  // Sincroniza a empresa padrão para transferência em lote quando as empresas forem carregadas
+  useEffect(() => {
+    if (companies.length > 0 && (!bulkTargetEmpresaId || !companies.some((c) => Number(c.id) === bulkTargetEmpresaId))) {
+      setBulkTargetEmpresaId(Number(companies[0].id));
+    }
+  }, [companies]);
+
+  // Limpa seleção ao mudar de aba
+  useEffect(() => {
+    setSelectedAccountIds(new Set());
+  }, [activeTab, statusFilter, categoryFilter, selectedMonth]);
 
   // Custom Categories list
   const [categoryList, setCategoryList] = useState<string[]>(() => {
@@ -437,6 +459,82 @@ export const AccountsTable: React.FC<AccountsTableProps> = ({
     }
 
     setEditingAccount(null);
+  };
+
+  const handleToggleSelectAccount = (id: number) => {
+    setSelectedAccountIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const handleToggleSelectAll = () => {
+    const visibleIds = filteredAccounts.map((a) => Number(a.id));
+    const allSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedAccountIds.has(id));
+    if (allSelected) {
+      setSelectedAccountIds((prev) => {
+        const next = new Set(prev);
+        visibleIds.forEach((id) => next.delete(id));
+        return next;
+      });
+    } else {
+      setSelectedAccountIds((prev) => {
+        const next = new Set(prev);
+        visibleIds.forEach((id) => next.add(id));
+        return next;
+      });
+    }
+  };
+
+  const handleExecuteBulkTransfer = async () => {
+    if (selectedAccountIds.size === 0) return;
+    const targetId = Number(bulkTargetEmpresaId);
+    const ids = Array.from(selectedAccountIds);
+    const targetComp = companies.find((c) => Number(c.id) === targetId);
+
+    setIsBulkTransferring(true);
+    try {
+      if (onBulkTransferCompany) {
+        onBulkTransferCompany(ids, targetId);
+      } else if (onEditAccount) {
+        ids.forEach((id) => {
+          const acc = accounts.find((a) => Number(a.id) === id);
+          if (acc) {
+            onEditAccount({
+              ...acc,
+              empresa_id: targetId,
+            });
+          }
+        });
+      }
+
+      setTransferNotification({
+        descricao: `${ids.length} lançamentos em lote`,
+        fromName: 'Empresa anterior',
+        toName: targetComp?.nome || `Empresa #${targetId}`,
+        toId: targetId,
+      });
+      setTimeout(() => {
+        setTransferNotification(null);
+      }, 9000);
+
+      setSelectedAccountIds(new Set());
+    } finally {
+      setIsBulkTransferring(false);
+    }
+  };
+
+  const handleExecuteBulkToggleStatus = () => {
+    if (selectedAccountIds.size === 0) return;
+    selectedAccountIds.forEach((id) => {
+      onToggleStatus(id);
+    });
+    setSelectedAccountIds(new Set());
   };
 
   return (
@@ -1095,13 +1193,84 @@ export const AccountsTable: React.FC<AccountsTableProps> = ({
             )}
           </div>
 
+          {/* BARRA FLUTUANTE DE AÇÕES EM MASSA / TRANSFERÊNCIA ENTRE EMPRESAS */}
+          {selectedAccountIds.size > 0 && (
+            <div className="mx-4 sm:mx-6 my-2 p-3 bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-slate-800/90 dark:to-slate-800 border border-blue-200 dark:border-blue-700/60 rounded-xl flex items-center justify-between gap-3 flex-wrap text-xs shadow-md animate-in fade-in">
+              <div className="flex items-center gap-2">
+                <span className="font-bold px-2 py-0.5 rounded-md bg-blue-600 text-white text-[11px] shadow-xs">
+                  {selectedAccountIds.size} selecionado(s)
+                </span>
+                <span className="text-slate-700 dark:text-slate-200 font-medium">
+                  Transferir lançamentos selecionados em lote:
+                </span>
+              </div>
+
+              <div className="flex items-center gap-2 flex-wrap">
+                <div className="flex items-center gap-1.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg px-2.5 py-1.5 shadow-2xs">
+                  <Building2 className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400 shrink-0" />
+                  <select
+                    value={bulkTargetEmpresaId}
+                    onChange={(e) => setBulkTargetEmpresaId(Number(e.target.value))}
+                    className="bg-transparent text-xs font-semibold text-slate-900 dark:text-white cursor-pointer outline-none max-w-[200px] truncate"
+                  >
+                    {companies.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.nome}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleExecuteBulkTransfer}
+                  disabled={isBulkTransferring}
+                  className="px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-bold flex items-center gap-1.5 transition-all shadow-xs cursor-pointer disabled:opacity-50"
+                  title="Mover todos os lançamentos marcados para a empresa selecionada"
+                >
+                  <ArrowRightLeft className="w-3.5 h-3.5" />
+                  <span>Transferir Empresa</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleExecuteBulkToggleStatus}
+                  className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold flex items-center gap-1.5 transition-all shadow-xs cursor-pointer"
+                  title="Alternar status (Pendente / Pago / Recebido) dos selecionados"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  <span>Alternar Status</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setSelectedAccountIds(new Set())}
+                  className="px-2.5 py-1.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 font-medium flex items-center gap-1 cursor-pointer"
+                  title="Desmarcar seleção"
+                >
+                  <X className="w-3.5 h-3.5" />
+                  <span>Desmarcar</span>
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Tabela */}
           <div className="flex-1 overflow-x-auto min-h-[260px] max-h-[380px]">
             <table className="w-full text-xs">
               <thead className="bg-gray-50 dark:bg-slate-800/60 sticky top-0 z-10 border-b border-gray-100 dark:border-slate-800">
                 <tr>
+                  <th className="w-10 text-center px-3 py-3">
+                    <input
+                      type="checkbox"
+                      checked={filteredAccounts.length > 0 && filteredAccounts.every((a) => selectedAccountIds.has(Number(a.id)))}
+                      onChange={handleToggleSelectAll}
+                      className="rounded border-gray-300 dark:border-slate-700 text-blue-600 focus:ring-blue-500 cursor-pointer w-3.5 h-3.5"
+                      title="Selecionar todos os lançamentos visíveis"
+                    />
+                  </th>
                   <th className="text-left px-4 py-3 text-gray-400 uppercase font-semibold tracking-wider">Descrição & Segmentação</th>
-                  {isConsolidated && (
+                  {(isConsolidated || companies.length > 1) && (
                     <th className="text-left px-3 py-3 text-gray-400 uppercase font-semibold tracking-wider">Empresa</th>
                   )}
                   <th className="text-right px-4 py-3 text-gray-400 uppercase font-semibold tracking-wider">Valor</th>
@@ -1112,22 +1281,32 @@ export const AccountsTable: React.FC<AccountsTableProps> = ({
               <tbody className="divide-y divide-gray-100 dark:divide-slate-800">
                 {filteredAccounts.length === 0 ? (
                   <tr>
-                    <td colSpan={isConsolidated ? 5 : 4} className="py-12 text-center text-gray-400 dark:text-gray-500">
+                    <td colSpan={(isConsolidated || companies.length > 1) ? 6 : 5} className="py-12 text-center text-gray-400 dark:text-gray-500">
                       Nenhum lançamento encontrado com os filtros atuais.
                     </td>
                   </tr>
                 ) : (
                   filteredAccounts.map((acc) => {
                     const isPaid = acc.status === 'Pago' || acc.status === 'Recebido';
-                    const comp = companies.find((c) => c.id === acc.empresa_id);
+                    const comp = companies.find((c) => Number(c.id) === Number(acc.empresa_id));
                     const bank = bankAccounts.find((b) => b.id === acc.banco_id);
                     const costCenter = costCenters.find((cc) => cc.id === acc.centro_custo_id);
 
                     return (
                       <tr 
                         key={acc.id} 
-                        className="hover:bg-gray-50/80 dark:hover:bg-slate-800/50 transition-colors"
+                        className={`hover:bg-gray-50/80 dark:hover:bg-slate-800/50 transition-colors ${
+                          selectedAccountIds.has(Number(acc.id)) ? 'bg-blue-50/50 dark:bg-blue-950/30' : ''
+                        }`}
                       >
+                        <td className="w-10 text-center px-3 py-3">
+                          <input
+                            type="checkbox"
+                            checked={selectedAccountIds.has(Number(acc.id))}
+                            onChange={() => handleToggleSelectAccount(Number(acc.id))}
+                            className="rounded border-gray-300 dark:border-slate-700 text-blue-600 focus:ring-blue-500 cursor-pointer w-3.5 h-3.5"
+                          />
+                        </td>
                         <td className="px-4 py-3 text-gray-700 dark:text-gray-300">
                           <div className="font-semibold text-gray-900 dark:text-white flex items-center gap-1.5 flex-wrap">
                             <span>{acc.descricao}</span>
@@ -1199,11 +1378,14 @@ export const AccountsTable: React.FC<AccountsTableProps> = ({
                           </div>
                         </td>
 
-                        {isConsolidated && (
+                        {(isConsolidated || companies.length > 1) && (
                           <td className="px-3 py-3">
-                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-gray-100 dark:bg-slate-800 text-gray-700 dark:text-gray-300 flex items-center gap-1 w-fit">
-                              <Building2 className="w-2.5 h-2.5 text-blue-500" />
-                              <span className="truncate max-w-[100px]">{comp?.nome || `ID #${acc.empresa_id}`}</span>
+                            <span 
+                              className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 flex items-center gap-1 w-fit"
+                              title={comp ? `Empresa: ${comp.nome}` : `Empresa #${acc.empresa_id}`}
+                            >
+                              <Building2 className="w-2.5 h-2.5 text-blue-500 shrink-0" />
+                              <span className="truncate max-w-[110px]">{comp?.nome || `ID #${acc.empresa_id}`}</span>
                             </span>
                           </td>
                         )}

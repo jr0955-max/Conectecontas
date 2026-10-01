@@ -147,6 +147,65 @@ import {
   saveServerReminderSettings
 } from './services/notepadService';
 
+/**
+ * Persistência inabalável de edições recentes do usuário no localStorage.
+ * Garante que trocas de empresa, valores ou status NUNCA sejam revertidos
+ * por recarregamento de página (F5), abas em segundo plano ou respostas legadas.
+ */
+function loadPersistedRecentEdits(): Map<number, { account: FinancialAccount; timestamp: number }> {
+  const map = new Map<number, { account: FinancialAccount; timestamp: number }>();
+  if (typeof window === 'undefined') return map;
+  try {
+    const raw = localStorage.getItem('fin_recently_edited_accounts');
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      const now = Date.now();
+      const MAX_AGE = 7 * 24 * 60 * 60 * 1000; // 7 dias de retenção
+      for (const [idStr, item] of Object.entries(parsed)) {
+        const id = Number(idStr);
+        const data = item as { account: FinancialAccount; timestamp: number };
+        if (id && data && data.account && (now - data.timestamp < MAX_AGE)) {
+          map.set(id, data);
+        }
+      }
+    }
+  } catch (e) {}
+  return map;
+}
+
+function savePersistedRecentEdit(account: FinancialAccount) {
+  try {
+    const current = loadPersistedRecentEdits();
+    current.set(Number(account.id), {
+      account,
+      timestamp: Date.now(),
+    });
+    const obj: Record<string, any> = {};
+    current.forEach((val, key) => {
+      obj[key] = val;
+    });
+    localStorage.setItem('fin_recently_edited_accounts', JSON.stringify(obj));
+  } catch (e) {}
+}
+
+function savePersistedRecentEditsBatch(accountsList: FinancialAccount[]) {
+  try {
+    const current = loadPersistedRecentEdits();
+    const now = Date.now();
+    accountsList.forEach((acc) => {
+      current.set(Number(acc.id), {
+        account: acc,
+        timestamp: now,
+      });
+    });
+    const obj: Record<string, any> = {};
+    current.forEach((val, key) => {
+      obj[key] = val;
+    });
+    localStorage.setItem('fin_recently_edited_accounts', JSON.stringify(obj));
+  } catch (e) {}
+}
+
 export default function App() {
   // 0. Multi-tenant SAAS Hierarchy Persistence
   const [tenants, setTenants] = useState<Tenant[]>(() => {
@@ -334,6 +393,7 @@ export default function App() {
   });
   const lastRestoredTimestampRef = useRef<number>(0);
   const recentlyDeletedAccountsRef = useRef<Map<number, number>>(new Map());
+  const recentlyEditedAccountsRef = useRef<Map<number, { account: FinancialAccount; timestamp: number }>>(loadPersistedRecentEdits());
 
   // 6. Lembretes Financeiros & Configuração de Prazo de Vencimento
   const [reminderSettings, setReminderSettings] = useState<ReminderSettings>(() => {
@@ -692,32 +752,72 @@ export default function App() {
                 } catch (e) {}
               }
 
-              // Merge inteligente: nunca perde contas que existiam localmente
+              // Merge inteligente com priorização de edições recentes e timestamps (protege contra reversão de empresa)
               const accountMap = new Map<number, FinancialAccount>();
-              localAccountsList.forEach((acc) => {
-                if (acc && acc.id) accountMap.set(Number(acc.id), acc);
+              const nowTime = Date.now();
+
+              // 1. Inicia com as contas do servidor
+              safeAccounts.forEach((serverAcc: FinancialAccount) => {
+                if (serverAcc && serverAcc.id) {
+                  accountMap.set(Number(serverAcc.id), serverAcc);
+                }
               });
-              safeAccounts.forEach((acc) => {
-                if (acc && acc.id) accountMap.set(Number(acc.id), acc);
+
+              // 2. Compara com contas locais: se a local tiver edição recente ou timestamp mais novo, a alteração local PREVALECE!
+              localAccountsList.forEach((localAcc: FinancialAccount) => {
+                if (!localAcc || !localAcc.id) return;
+                const accId = Number(localAcc.id);
+                const serverAcc = accountMap.get(accId);
+
+                if (!serverAcc) {
+                  accountMap.set(accId, localAcc);
+                  return;
+                }
+
+                // Proteção inabalável para edição recente do usuário neste navegador (persistida em localStorage)
+                const recentEdit = recentlyEditedAccountsRef.current.get(accId);
+                if (recentEdit) {
+                  const sTime = serverAcc.atualizado_em ? new Date(serverAcc.atualizado_em).getTime() : 0;
+                  const eTime = recentEdit.account.atualizado_em ? new Date(recentEdit.account.atualizado_em).getTime() : recentEdit.timestamp;
+                  // Se o servidor tem empresa diferente da edição recente ou timestamp do servidor não é estritamente mais novo:
+                  if (Number(serverAcc.empresa_id) !== Number(recentEdit.account.empresa_id) || eTime >= sTime) {
+                    accountMap.set(accId, recentEdit.account);
+                    return;
+                  }
+                }
+
+                const localUpdated = localAcc.atualizado_em
+                  ? new Date(localAcc.atualizado_em).getTime()
+                  : (localAcc.criado_em ? new Date(localAcc.criado_em).getTime() : 0);
+
+                const serverUpdated = serverAcc.atualizado_em
+                  ? new Date(serverAcc.atualizado_em).getTime()
+                  : (serverAcc.criado_em ? new Date(serverAcc.criado_em).getTime() : 0);
+
+                // Se o local foi atualizado mais recentemente que o servidor, prevalece o local!
+                if (localUpdated > serverUpdated) {
+                  accountMap.set(accId, localAcc);
+                }
               });
 
               const finalAccounts = Array.from(accountMap.values()).map((acc) => {
                 if (Number(acc.valor) === 0 || /saldo\s+(do\s+dia|anterior)/i.test(acc.descricao || '')) {
                   return { ...acc, excluido: true };
                 }
-                // Garante que o lote do segundo extrato (Lourenço Junior) fique na empresa correta (1788220409638)
-                if (Number(acc.id) >= 1790300442952 && Number(acc.id) <= 1790300442980) {
-                  return { ...acc, empresa_id: 1788220409638 };
-                }
                 return acc;
               });
               setAccounts(finalAccounts);
               localStorage.setItem('fin_accounts', JSON.stringify(finalAccounts));
 
-              // Se o navegador possuía contas que o servidor não tinha (ex: após reinício de contêiner ou novo servidor),
-              // envia imediatamente essas contas para o servidor central para que fique 100% atualizado!
-              if (finalAccounts.length > safeAccounts.length && serverClearedAt === 0) {
-                console.log(`🛡️ [App.tsx] Sincronização de Resgate: Restaurando ${finalAccounts.length - safeAccounts.length} contas do navegador para o servidor central!`);
+              // Se o navegador possuía edições locais que o servidor ainda não gravou, envia imediatamente ao servidor
+              const hasLocalEdits = finalAccounts.some((a) => {
+                const s = sData.accounts.find((sa: any) => Number(sa.id) === Number(a.id));
+                if (!s) return true;
+                return Number(s.empresa_id) !== Number(a.empresa_id) || s.status !== a.status || Number(s.valor) !== Number(a.valor);
+              });
+
+              if ((finalAccounts.length > safeAccounts.length || hasLocalEdits) && serverClearedAt === 0) {
+                console.log(`🛡️ [App.tsx] Sincronização de Resgate: Atualizando lançamentos do navegador para o servidor central!`);
                 saveServerSystemStore({
                   hasCustomData: true,
                   companies: sData.companies || [],
@@ -728,8 +828,10 @@ export default function App() {
                   costCenters: sData.costCenters || [],
                   tenants: sData.tenants || [],
                   auditLogs: sData.auditLogs || [],
+                  notepadState: sData.notepadState,
+                  reminderSettings: sData.reminderSettings,
                   source: 'client_local_cache_recovery',
-                }).catch((e) => console.warn('Aviso ao sincronizar contas recuperadas:', e));
+                }, userTenantId).catch((e) => console.warn('Aviso ao sincronizar contas recuperadas:', e));
               }
             }
           }
@@ -826,7 +928,7 @@ export default function App() {
         try { if (localCompsRaw) localComps = JSON.parse(localCompsRaw); } catch (e) {}
 
         const isDemo = localComps.length === 5 && localComps[0]?.nome === 'Matriz - Gestão Empresarial';
-        if (localComps.length > 0 && !isDemo) {
+        if (serverStore && serverStore.success && serverStore.hasCustomData === false && localComps.length > 0 && !isDemo) {
           // Salvar no servidor central imediatamente para que o celular leia na hora
           let localAccounts: FinancialAccount[] = [];
           let localUsers: User[] = [];
@@ -928,13 +1030,36 @@ export default function App() {
     const unsubAccounts = subscribeToAccounts((cloudAccs) => {
       if (Date.now() - lastRestoredTimestampRef.current < 30000) return;
       if (Array.isArray(cloudAccs) && cloudAccs.length > 0) {
-        const fixedCloudAccs = cloudAccs.map((a) => {
-          if (a && Number(a.id) >= 1790300442952 && Number(a.id) <= 1790300442980 && Number(a.empresa_id) === 1788215217113) {
-            return { ...a, empresa_id: 1788220409638 };
-          }
-          return a;
+        const now = Date.now();
+        setAccounts((prevAccounts) => {
+          const accMap = new Map<number, FinancialAccount>();
+          cloudAccs.forEach((ca) => {
+            if (ca && ca.id) accMap.set(Number(ca.id), ca);
+          });
+          prevAccounts.forEach((pa) => {
+            if (!pa || !pa.id) return;
+            const id = Number(pa.id);
+            const recentEdit = recentlyEditedAccountsRef.current.get(id);
+            if (recentEdit) {
+              const ca = accMap.get(id);
+              const caTime = ca?.atualizado_em ? new Date(ca.atualizado_em).getTime() : 0;
+              const eTime = recentEdit.account.atualizado_em ? new Date(recentEdit.account.atualizado_em).getTime() : recentEdit.timestamp;
+              if (Number(ca?.empresa_id) !== Number(recentEdit.account.empresa_id) || eTime >= caTime) {
+                accMap.set(id, recentEdit.account);
+                return;
+              }
+            }
+            const paTime = pa.atualizado_em ? new Date(pa.atualizado_em).getTime() : 0;
+            const ca = accMap.get(id);
+            const caTime = ca?.atualizado_em ? new Date(ca.atualizado_em).getTime() : 0;
+            if (paTime > caTime) {
+              accMap.set(id, pa);
+            }
+          });
+          const merged = Array.from(accMap.values());
+          localStorage.setItem('fin_accounts', JSON.stringify(merged));
+          return merged;
         });
-        setAccounts(fixedCloudAccs);
         setCloudSynced(true);
       }
     });
@@ -2175,8 +2300,21 @@ export default function App() {
       atualizado_por: currentUser?.nome || 'Admin',
       atualizado_em: new Date().toISOString(),
     };
+
+    // 1. Guarda referência de edição recente com timestamp para impedir que o polling de 4s a reverta
+    recentlyEditedAccountsRef.current.set(sanitized.id, {
+      account: sanitized,
+      timestamp: Date.now(),
+    });
+    savePersistedRecentEdit(sanitized);
+
+    // 2. Atualiza estado e persiste imediatamente de forma síncrona no localStorage
     const nextAccs = accounts.map((a) => (Number(a.id) === Number(sanitized.id) ? sanitized : a));
     setAccounts(nextAccs);
+    localStorage.setItem('fin_accounts', JSON.stringify(nextAccs));
+
+    // 3. Salva no servidor central e na nuvem
+    const userTenantId = Number(currentUser?.tenant_id || 1);
     saveServerAccount(sanitized).catch((err) => console.warn('Erro ao atualizar conta no servidor central:', err));
     saveServerSystemStore({
       hasCustomData: true,
@@ -2188,8 +2326,10 @@ export default function App() {
       costCenters,
       tenants,
       auditLogs,
+      notepadState,
+      reminderSettings,
       source: 'edit_account_instant',
-    }).catch(() => {});
+    }, userTenantId).catch(() => {});
     saveCloudAccount(sanitized).catch((err) => console.warn('Erro ao editar conta na nuvem:', err));
 
     // Audit Log
@@ -2200,8 +2340,73 @@ export default function App() {
       usuario_id: currentUser ? currentUser.id : 1,
       usuario_nome: currentUser ? currentUser.nome : 'Admin',
       empresa_id: sanitized.empresa_id,
-      descricao: `Editou o lançamento "${sanitized.descricao}" (Valor: R$ ${sanitized.valor.toFixed(2)}, Venc: ${sanitized.data_vencimento})`,
+      descricao: `Editou o lançamento "${sanitized.descricao}" (Empresa #${sanitized.empresa_id}, Valor: R$ ${sanitized.valor.toFixed(2)}, Venc: ${sanitized.data_vencimento})`,
       detalhes: { account: sanitized },
+    }).catch((e) => console.warn('Audit log error:', e));
+  };
+
+  const handleBulkTransferAccounts = (accountIds: number[], targetEmpresaId: number) => {
+    if (!accountIds || accountIds.length === 0) return;
+    const targetComp = companies.find((c) => Number(c.id) === Number(targetEmpresaId));
+    const nowIso = new Date().toISOString();
+    const updatedList: FinancialAccount[] = [];
+
+    const nextAccounts = accounts.map((acc) => {
+      if (accountIds.includes(Number(acc.id))) {
+        const updated: FinancialAccount = {
+          ...acc,
+          empresa_id: Number(targetEmpresaId),
+          atualizado_por: currentUser?.nome || 'Admin',
+          atualizado_em: nowIso,
+        };
+        updatedList.push(updated);
+        recentlyEditedAccountsRef.current.set(Number(acc.id), {
+          account: updated,
+          timestamp: Date.now(),
+        });
+        return updated;
+      }
+      return acc;
+    });
+
+    // 1. Atualiza estado e localStorage imediatamente
+    setAccounts(nextAccounts);
+    localStorage.setItem('fin_accounts', JSON.stringify(nextAccounts));
+    savePersistedRecentEditsBatch(updatedList);
+
+    // 2. Salva no servidor central em lote (batch) e atualiza snapshot global
+    const userTenantId = Number(currentUser?.tenant_id || 1);
+    saveServerAccountsBatch(updatedList).catch((e) => console.warn('Erro ao salvar lote no servidor:', e));
+    saveServerSystemStore({
+      hasCustomData: true,
+      companies,
+      accounts: nextAccounts,
+      users,
+      userCompanies,
+      bankAccounts,
+      costCenters,
+      tenants,
+      auditLogs,
+      notepadState,
+      reminderSettings,
+      source: 'bulk_company_transfer',
+    }, userTenantId).catch(() => {});
+
+    // 3. Salva no Firestore
+    updatedList.forEach((acc) => {
+      saveCloudAccount(acc).catch(() => {});
+    });
+
+    // 4. Audit Log
+    saveCloudAuditLog({
+      acao: 'EDICAO',
+      entidade: 'conta',
+      entidade_id: updatedList[0]?.id || 0,
+      usuario_id: currentUser ? currentUser.id : 1,
+      usuario_nome: currentUser ? currentUser.nome : 'Admin',
+      empresa_id: targetEmpresaId,
+      descricao: `Transferiu ${updatedList.length} lançamento(s) para a empresa "${targetComp?.nome || targetEmpresaId}"`,
+      detalhes: { count: updatedList.length, accountIds, targetEmpresaId },
     }).catch((e) => console.warn('Audit log error:', e));
   };
 
@@ -2224,6 +2429,14 @@ export default function App() {
 
     if (updatedAcc) {
       const ua = updatedAcc as FinancialAccount;
+      recentlyEditedAccountsRef.current.set(ua.id, {
+        account: ua,
+        timestamp: Date.now(),
+      });
+      savePersistedRecentEdit(ua);
+      localStorage.setItem('fin_accounts', JSON.stringify(nextAccs));
+
+      const userTenantId = Number(currentUser?.tenant_id || 1);
       saveServerAccount(ua).catch((err) => console.warn('Erro ao salvar status no servidor:', err));
       saveServerSystemStore({
         hasCustomData: true,
@@ -2235,8 +2448,10 @@ export default function App() {
         costCenters,
         tenants,
         auditLogs,
+        notepadState,
+        reminderSettings,
         source: 'toggle_status_instant',
-      }).catch(() => {});
+      }, userTenantId).catch(() => {});
       saveCloudAccount(ua).catch((err) => console.warn('Erro ao alternar status na nuvem:', err));
 
       const isSettled = ua.status === 'Pago' || ua.status === 'Recebido';
@@ -4012,6 +4227,7 @@ export default function App() {
                 currentUser={currentUser || undefined}
                 onAddAccount={handleAddAccount}
                 onEditAccount={handleEditAccount}
+                onBulkTransferCompany={handleBulkTransferAccounts}
                 onToggleStatus={handleToggleStatus}
                 onDeleteAccount={handleDeleteAccount}
                 onAccountPaidViaBank={handlePaymentSuccessViaBank}

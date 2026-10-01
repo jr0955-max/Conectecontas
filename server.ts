@@ -4074,27 +4074,36 @@ async function startServer() {
         fs.writeFileSync(path.join(BACKUP_DIR, `system_store_before_add_${Date.now()}.json`), JSON.stringify(store, null, 2));
       } catch (e) {}
 
-      const idx = store.accounts.findIndex((a: any) => Number(a.id) === Number(account.id));
+      const nowIso = new Date().toISOString();
+      const updatedAccount = {
+        ...account,
+        id: Number(account.id),
+        empresa_id: Number(account.empresa_id),
+        valor: Number(account.valor),
+        atualizado_em: account.atualizado_em || nowIso,
+      };
+
+      const idx = store.accounts.findIndex((a: any) => Number(a.id) === Number(updatedAccount.id));
       if (idx !== -1) {
-        store.accounts[idx] = { ...store.accounts[idx], ...account };
+        store.accounts[idx] = { ...store.accounts[idx], ...updatedAccount };
       } else {
-        store.accounts.unshift(account);
+        store.accounts.unshift(updatedAccount);
       }
 
       store.hasCustomData = true;
-      store.updatedAt = new Date().toISOString();
+      store.updatedAt = nowIso;
       fs.writeFileSync(SYSTEM_STORE_PATH, JSON.stringify(store, null, 2), "utf8");
 
       // Sincronização não-bloqueante no Firestore
       (async () => {
         try {
-          const accRef = doc(db, "accounts", String(account.id));
-          await setDoc(accRef, account, { merge: true });
+          const accRef = doc(db, "accounts", String(updatedAccount.id));
+          await setDoc(accRef, updatedAccount, { merge: true });
         } catch (e) {}
       })();
 
-      console.log(`✅ [POST /api/accounts] Conta #${account.id} salva no servidor (${account.descricao})`);
-      return res.status(200).json({ success: true, account, totalAccounts: store.accounts.length });
+      console.log(`✅ [POST /api/accounts] Conta #${updatedAccount.id} salva no servidor (${updatedAccount.descricao}) Empresa #${updatedAccount.empresa_id}`);
+      return res.status(200).json({ success: true, account: updatedAccount, totalAccounts: store.accounts.length });
     } catch (err: any) {
       console.error("Erro ao criar conta no servidor:", err);
       return res.status(500).json({ success: false, error: err?.message });
@@ -4123,13 +4132,27 @@ async function startServer() {
         fs.writeFileSync(path.join(BACKUP_DIR, `system_store_before_batch_${Date.now()}.json`), JSON.stringify(store, null, 2));
       } catch (e) {}
 
+      const nowIso = new Date().toISOString();
       const accountMap = new Map<number, any>();
       store.accounts.forEach((a: any) => { if (a && a.id) accountMap.set(Number(a.id), a); });
-      incomingBatch.forEach((a: any) => { if (a && a.id) accountMap.set(Number(a.id), a); });
+      incomingBatch.forEach((a: any) => {
+        if (a && a.id) {
+          const accId = Number(a.id);
+          const existing = accountMap.get(accId);
+          accountMap.set(accId, {
+            ...(existing || {}),
+            ...a,
+            id: accId,
+            empresa_id: Number(a.empresa_id || existing?.empresa_id || 1),
+            valor: Number(a.valor !== undefined ? a.valor : (existing?.valor || 0)),
+            atualizado_em: a.atualizado_em || nowIso,
+          });
+        }
+      });
 
       store.accounts = Array.from(accountMap.values());
       store.hasCustomData = true;
-      store.updatedAt = new Date().toISOString();
+      store.updatedAt = nowIso;
       fs.writeFileSync(SYSTEM_STORE_PATH, JSON.stringify(store, null, 2), "utf8");
 
       // Sincronização não-bloqueante no Firestore em lotes de 400
@@ -4393,17 +4416,54 @@ async function startServer() {
             finalAccounts = existingAccountsList.filter((a: any) => a && !deletedAccountIds.has(Number(a.id)));
           } else {
             // Merge seguro padrão para qualquer sincronização entre múltiplos computadores, notebooks ou celular:
-            // Garante que nenhum computador/notebook apague movimentações que foram cadastradas no outro!
+            // Garante que nenhum computador/notebook apague movimentações ou reverta edições de empresas/status!
             const accountMap = new Map<number, any>();
             existingAccountsList.forEach((a: any) => {
               if (a && a.id && !deletedAccountIds.has(Number(a.id))) {
                 accountMap.set(Number(a.id), a);
               }
             });
-            accounts.forEach((a: any) => {
-              if (a && a.id && !deletedAccountIds.has(Number(a.id))) {
-                accountMap.set(Number(a.id), a);
+
+            accounts.forEach((incomingAcc: any) => {
+              if (!incomingAcc || !incomingAcc.id || deletedAccountIds.has(Number(incomingAcc.id))) return;
+              const accId = Number(incomingAcc.id);
+              const existingAcc = accountMap.get(accId);
+
+              if (!existingAcc) {
+                accountMap.set(accId, incomingAcc);
+                return;
               }
+
+              // Comparação robusta de timestamps de atualização para blindagem contra reversão de empresa/status
+              const existingTime = existingAcc.atualizado_em
+                ? new Date(existingAcc.atualizado_em).getTime()
+                : (existingAcc.criado_em ? new Date(existingAcc.criado_em).getTime() : 0);
+
+              const incomingTime = incomingAcc.atualizado_em
+                ? new Date(incomingAcc.atualizado_em).getTime()
+                : (incomingAcc.criado_em ? new Date(incomingAcc.criado_em).getTime() : 0);
+
+              // 1. Se o servidor já tem uma edição com timestamp mais recente que o payload que está chegando:
+              // O servidor PREVALECE! Impede reversão para empresa antiga ou dados antigos.
+              if (existingTime > incomingTime) {
+                return;
+              }
+
+              // 2. Se o servidor tem timestamp de atualização explícito e o incoming NÃO tem atualizado_em:
+              // O servidor PREVALECE! Impede que caches legados sem timestamp sobrescrevam dados editados.
+              if (existingAcc.atualizado_em && !incomingAcc.atualizado_em) {
+                return;
+              }
+
+              // 3. Caso contrário, adota os dados mais recentes do incoming preservando integridade
+              accountMap.set(accId, {
+                ...existingAcc,
+                ...incomingAcc,
+                id: accId,
+                empresa_id: Number(incomingAcc.empresa_id || existingAcc.empresa_id),
+                valor: Number(incomingAcc.valor !== undefined ? incomingAcc.valor : (existingAcc.valor || 0)),
+                atualizado_em: incomingAcc.atualizado_em || existingAcc.atualizado_em || new Date().toISOString(),
+              });
             });
             finalAccounts = Array.from(accountMap.values());
           }
